@@ -11,10 +11,12 @@ import (
 
 func main() {
 	var (
-		output    string
-		suffix    string
-		preset    string
-		handbrake string
+		output     string
+		suffix     string
+		preset     string
+		handbrake  string
+		verbose    bool
+		noProgress bool
 	)
 
 	flag.StringVar(&output, "output", "", "Set output file name")
@@ -24,6 +26,8 @@ func main() {
 	flag.StringVar(&preset, "preset", vshrink.DefaultPreset, "Name of the HandBrake preset to use")
 	flag.StringVar(&preset, "p", vshrink.DefaultPreset, "Name of the HandBrake preset to use (shorthand)")
 	flag.StringVar(&handbrake, "handbrake", vshrink.DefaultHandbrake, "Path to the HandBrakeCLI executable")
+	flag.BoolVar(&verbose, "v", false, "verbose output")
+	flag.BoolVar(&noProgress, "no-progress", false, "disable progress output")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: vshrink [options] input-file\n\n")
@@ -44,6 +48,8 @@ func main() {
 		Suffix:        suffix,
 		Preset:        preset,
 		HandbrakePath: handbrake,
+		Verbose:       verbose,
+		Progress:      !noProgress,
 	}
 
 	if err := vshrink.Run(cfg); err != nil {

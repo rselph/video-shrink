@@ -27,6 +27,10 @@ type Config struct {
 	Preset string
 	// HandbrakePath is the path to the HandBrakeCLI executable.
 	HandbrakePath string
+	// Verbose enables verbose output when true.
+	Verbose bool
+	// Progress enables progress output when true.
+	Progress bool
 }
 
 // OutputPath returns the output file path for the given config.
@@ -68,8 +72,13 @@ func Run(c Config) error {
 		handbrake = DefaultHandbrake
 	}
 	cmd := exec.Command(handbrake, BuildArgs(c)...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	if c.Progress {
+		cmd.Stdout = os.Stdout
+	}
+	if c.Verbose {
+		cmd.Stderr = os.Stderr
+	}
+	fmt.Println(strings.Join(cmd.Args, " "))
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("HandBrakeCLI failed: %w", err)
 	}
