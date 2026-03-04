@@ -15,6 +15,29 @@ const (
 	DefaultHandbrake = "HandBrakeCLI"
 )
 
+// VideoExtensions is the set of file extensions recognised as video files.
+var VideoExtensions = map[string]bool{
+	".mp4":  true,
+	".mkv":  true,
+	".avi":  true,
+	".mov":  true,
+	".m4v":  true,
+	".wmv":  true,
+	".flv":  true,
+	".webm": true,
+	".mpeg": true,
+	".mpg":  true,
+	".ts":   true,
+	".m2ts": true,
+	".vob":  true,
+}
+
+// IsVideoFile returns true when path has a recognised video file extension.
+func IsVideoFile(path string) bool {
+	ext := strings.ToLower(filepath.Ext(path))
+	return VideoExtensions[ext]
+}
+
 // Config holds the configuration for a video conversion operation.
 type Config struct {
 	// Input is the path to the input video file.
@@ -64,9 +87,55 @@ func BuildArgs(c Config) []string {
 }
 
 // Run invokes HandBrakeCLI with the settings in c, streaming its output to
-// the process's stdout and stderr. It returns an error if HandBrakeCLI cannot
-// be started or exits with a non-zero status.
+// the process's stdout and stderr.  When c.Input is a directory it recurses
+// into it (see runDir).  It returns an error if HandBrakeCLI cannot be started
+// or exits with a non-zero status.
 func Run(c Config) error {
+	info, err := os.Stat(c.Input)
+	if err != nil {
+		return fmt.Errorf("cannot access input: %w", err)
+	}
+	if info.IsDir() {
+		if c.Output != "" {
+			return fmt.Errorf("output file cannot be specified when input is a directory")
+		}
+		return runDir(c)
+	}
+	return runFile(c)
+}
+
+// runDir walks the directory tree rooted at c.Input, calling runFile for every
+// video file that has not already been converted (i.e. whose base name does not
+// already end with the configured suffix).
+func runDir(c Config) error {
+	suffix := c.Suffix
+	if suffix == "" {
+		suffix = DefaultSuffix
+	}
+	return filepath.WalkDir(c.Input, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if !IsVideoFile(path) {
+			return nil
+		}
+		// Skip files that already carry the suffix (previously converted outputs).
+		ext := filepath.Ext(path)
+		base := strings.TrimSuffix(path, ext)
+		if strings.HasSuffix(base, suffix) {
+			return nil
+		}
+		fileCfg := c
+		fileCfg.Input = path
+		return runFile(fileCfg)
+	})
+}
+
+// runFile invokes HandBrakeCLI for a single input file described by c.
+func runFile(c Config) error {
 	handbrake := c.HandbrakePath
 	if handbrake == "" {
 		handbrake = DefaultHandbrake
