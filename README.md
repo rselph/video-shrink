@@ -8,7 +8,7 @@ Use HandBrakeCLI to re-encode video files in bulk for Plex, etc.
 vshrink [options] input-file
     -o, -output file        Set output file name
     -s, -suffix name        Use "name" instead of ".vshrink" for output files
-    -in-place               Attempt to replace the original file with the converted file
+[[future feature]]    -in-place               Attempt to replace the original file with the converted file
     -p, -preset             Name of the HandBrake preset to use
     -handbrake              Path to the HandBrakeCLI executable
 ```
@@ -18,8 +18,8 @@ re-encode the input file.  The output file will be a video file in the same dire
 ".vshrink" added to the filename, before the type suffix. There are lots of options to change these
 default behaviors.
 
-If the input-file is actually a directory, video-shrink will search recursively for video files and
+[[future feature]] If the input-file is actually a directory, video-shrink will search recursively for video files and
 convert each one as it finds it.  This behavior is not compatible with the -output option.
 
-When using the -in-place option, video-shrink won't touch the original file if it is smaller than
+[[future feature]] When using the -in-place option, video-shrink won't touch the original file if it is smaller than
 the converted file.
