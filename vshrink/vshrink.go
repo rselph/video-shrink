@@ -52,6 +52,7 @@ func BuildArgs(c Config) []string {
 		preset = DefaultPreset
 	}
 	return []string{
+		"--preset-import-gui",
 		"--preset", preset,
 		"-i", c.Input,
 		"-o", OutputPath(c),

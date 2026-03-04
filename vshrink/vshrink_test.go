@@ -61,6 +61,7 @@ func TestBuildArgs(t *testing.T) {
 			name:   "defaults used when fields are empty",
 			config: vshrink.Config{Input: "video.mp4"},
 			want: []string{
+				"--preset-import-gui",
 				"--preset", vshrink.DefaultPreset,
 				"-i", "video.mp4",
 				"-o", "video.vshrink.mp4",
@@ -70,6 +71,7 @@ func TestBuildArgs(t *testing.T) {
 			name:   "custom preset and explicit output",
 			config: vshrink.Config{Input: "video.mp4", Preset: "HQ 1080p30 Surround", Output: "out.mp4"},
 			want: []string{
+				"--preset-import-gui",
 				"--preset", "HQ 1080p30 Surround",
 				"-i", "video.mp4",
 				"-o", "out.mp4",
@@ -79,6 +81,7 @@ func TestBuildArgs(t *testing.T) {
 			name:   "custom suffix applied",
 			config: vshrink.Config{Input: "/movies/film.avi", Suffix: ".enc"},
 			want: []string{
+				"--preset-import-gui",
 				"--preset", vshrink.DefaultPreset,
 				"-i", "/movies/film.avi",
 				"-o", "/movies/film.enc.avi",
