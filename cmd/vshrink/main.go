@@ -56,7 +56,7 @@ func main() {
 	}
 
 	if err := vshrink.Run(cfg); err != nil {
-		fmt.Fprintf(os.Stderr, "vshrink: %v\n", err)
+		fmt.Fprintf(os.Stderr, "\nvshrink: %v\n", err)
 		os.Exit(1)
 	}
 }
