@@ -11,14 +11,15 @@ import (
 
 func main() {
 	var (
-		output      string
-		suffix      string
-		preset      string
-		handbrake   string
-		verbose     bool
-		noProgress  bool
-		keepOnError bool
-		inPlace     bool
+		output          string
+		suffix          string
+		preset          string
+		handbrake       string
+		verbose         bool
+		noProgress      bool
+		keepOnError     bool
+		inPlace         bool
+		continueOnError bool
 	)
 
 	flag.StringVar(&output, "output", "", "Set output file name")
@@ -32,34 +33,41 @@ func main() {
 	flag.BoolVar(&noProgress, "no-progress", false, "disable progress output")
 	flag.BoolVar(&keepOnError, "keep", false, "keep output file on error instead of deleting it")
 	flag.BoolVar(&inPlace, "in-place", false, "replace original with output when output is smaller")
-
+	flag.BoolVar(&continueOnError, "continue", false, "continue processing other files on error")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: vshrink [options] input-file\n\n")
+		fmt.Fprintf(os.Stderr, "Usage: vshrink [options] input-file [input-file...]\n\n")
 		fmt.Fprintf(os.Stderr, "Options:\n")
 		flag.PrintDefaults()
 	}
 
 	flag.Parse()
 
-	if flag.NArg() != 1 {
+	if flag.NArg() < 1 {
 		flag.Usage()
 		os.Exit(1)
 	}
 
-	cfg := vshrink.Config{
-		Input:         flag.Arg(0),
-		Output:        output,
-		Suffix:        suffix,
-		Preset:        preset,
-		HandbrakePath: handbrake,
-		Verbose:       verbose,
-		Progress:      !noProgress,
-		KeepOnError:   keepOnError,
-		InPlace:       inPlace,
-	}
+	exitVal := 0
+	for _, arg := range flag.Args() {
+		cfg := vshrink.Config{
+			Input:         arg,
+			Output:        output,
+			Suffix:        suffix,
+			Preset:        preset,
+			HandbrakePath: handbrake,
+			Verbose:       verbose,
+			Progress:      !noProgress,
+			KeepOnError:   keepOnError,
+			InPlace:       inPlace,
+		}
 
-	if err := vshrink.Run(cfg); err != nil {
-		fmt.Fprintf(os.Stderr, "\nvshrink: %v\n", err)
-		os.Exit(1)
+		if err := vshrink.Run(cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "\nvshrink: %v\n", err)
+			exitVal = 1
+			if !continueOnError {
+				break
+			}
+		}
 	}
+	os.Exit(exitVal)
 }
