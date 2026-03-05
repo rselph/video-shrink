@@ -72,6 +72,14 @@ func OutputPath(c Config) string {
 	return base + suffix + ext
 }
 
+// MarkerPath returns the path of the sentinel file written by swapInPlace after
+// a successful in-place replacement.  The marker is an empty file placed in the
+// same directory as c.Input, named ".vshrink.done." followed by the input
+// file's base name.
+func MarkerPath(c Config) string {
+	return filepath.Join(filepath.Dir(c.Input), ".vshrink.done."+filepath.Base(c.Input))
+}
+
 // BuildArgs returns the HandBrakeCLI argument list for the given config.
 func BuildArgs(c Config) []string {
 	preset := c.Preset
@@ -273,5 +281,13 @@ func swapInPlace(c Config, outputPath string) error {
 	if err := os.Remove(backupPath); err != nil {
 		fmt.Printf("in-place: warning: could not remove backup %s: %v\n", backupPath, err)
 	}
+
+	// Create a marker file to record that this file has been processed.
+	if f, err := os.Create(MarkerPath(c)); err == nil {
+		f.Close()
+	} else {
+		fmt.Printf("in-place: warning: could not create marker file %s: %v\n", MarkerPath(c), err)
+	}
+
 	return nil
 }
