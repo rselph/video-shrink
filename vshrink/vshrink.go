@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 const (
@@ -150,7 +152,24 @@ func runFile(c Config) error {
 		cmd.Stderr = os.Stderr
 	}
 	fmt.Println(strings.Join(cmd.Args, " "))
-	if err := cmd.Run(); err != nil {
+
+	// Set up signal handling before starting the process to avoid a race
+	// where a signal arrives before Notify is called.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("HandBrakeCLI failed to start: %w", err)
+	}
+
+	go func() {
+		if _, ok := <-sigCh; ok {
+			cmd.Process.Kill()
+		}
+	}()
+
+	if err := cmd.Wait(); err != nil {
 		if !c.KeepOnError {
 			os.Remove(OutputPath(c))
 		}
