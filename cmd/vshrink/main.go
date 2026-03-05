@@ -11,7 +11,6 @@ import (
 
 func main() {
 	var (
-		output          string
 		suffix          string
 		preset          string
 		handbrake       string
@@ -22,10 +21,8 @@ func main() {
 		continueOnError bool
 	)
 
-	flag.StringVar(&output, "output", "", "Set output file name")
-	flag.StringVar(&output, "o", "", "Set output file name (shorthand)")
-	flag.StringVar(&suffix, "suffix", vshrink.DefaultSuffix, `Suffix inserted before the file extension when -output is not set`)
-	flag.StringVar(&suffix, "s", vshrink.DefaultSuffix, `Suffix inserted before the file extension when -output is not set (shorthand)`)
+	flag.StringVar(&suffix, "suffix", vshrink.DefaultSuffix, "Suffix inserted before the file extension")
+	flag.StringVar(&suffix, "s", vshrink.DefaultSuffix, "Suffix inserted before the file extension (shorthand)")
 	flag.StringVar(&preset, "preset", vshrink.DefaultPreset, "Name of the HandBrake preset to use")
 	flag.StringVar(&preset, "p", vshrink.DefaultPreset, "Name of the HandBrake preset to use (shorthand)")
 	flag.StringVar(&handbrake, "handbrake", vshrink.DefaultHandbrake, "Path to the HandBrakeCLI executable")
@@ -51,7 +48,6 @@ func main() {
 	for _, arg := range flag.Args() {
 		cfg := vshrink.Config{
 			Input:         arg,
-			Output:        output,
 			Suffix:        suffix,
 			Preset:        preset,
 			HandbrakePath: handbrake,

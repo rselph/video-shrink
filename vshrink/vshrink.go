@@ -44,9 +44,7 @@ func IsVideoFile(path string) bool {
 type Config struct {
 	// Input is the path to the input video file.
 	Input string
-	// Output is the explicit output file path. If empty, it is derived from Input and Suffix.
-	Output string
-	// Suffix is inserted before the file extension when Output is empty.
+	// Suffix is inserted before the file extension to form the output path.
 	Suffix string
 	// Preset is the HandBrake preset name to use.
 	Preset string
@@ -62,13 +60,9 @@ type Config struct {
 	InPlace bool
 }
 
-// OutputPath returns the output file path for the given config.
-// If c.Output is set it is returned directly; otherwise the path is derived
-// from c.Input by inserting c.Suffix before the file extension.
+// OutputPath returns the output file path for the given config,
+// derived from c.Input by inserting c.Suffix before the file extension.
 func OutputPath(c Config) string {
-	if c.Output != "" {
-		return c.Output
-	}
 	suffix := c.Suffix
 	if suffix == "" {
 		suffix = DefaultSuffix
@@ -97,17 +91,11 @@ func BuildArgs(c Config) []string {
 // into it (see runDir).  It returns an error if HandBrakeCLI cannot be started
 // or exits with a non-zero status.
 func Run(c Config) error {
-	if c.InPlace && c.Output != "" {
-		return fmt.Errorf("-in-place and -output are mutually exclusive")
-	}
 	info, err := os.Stat(c.Input)
 	if err != nil {
 		return fmt.Errorf("cannot access input: %w", err)
 	}
 	if info.IsDir() {
-		if c.Output != "" {
-			return fmt.Errorf("output file cannot be specified when input is a directory")
-		}
 		return runDir(c)
 	}
 	return runFile(c)

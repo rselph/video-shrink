@@ -12,11 +12,10 @@ vshrink [options] input-file [input-file...]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-o`, `-output` | _(derived)_ | Set output file name (incompatible with directory input and `-in-place`) |
-| `-s`, `-suffix` | `.vshrink` | Suffix inserted before the file extension when `-output` is not set |
+| `-s`, `-suffix` | `.vshrink` | Suffix inserted before the file extension to form the output file name |
 | `-p`, `-preset` | `vshrink` | Name of the HandBrake preset to use |
 | `-handbrake` | `HandBrakeCLI` | Path to the HandBrakeCLI executable |
-| `-in-place` | false | Replace the original file with the output when the output is smaller (incompatible with `-output`) |
+| `-in-place` | false | Replace the original file with the output when the output is smaller |
 | `-keep` | false | Keep the output file on error instead of deleting it |
 | `-continue` | false | Continue processing remaining files after an error |
 | `-v` | false | Verbose output (show HandBrakeCLI stderr) |
@@ -35,7 +34,7 @@ already exists, vshrink proceeds directly to the in-place swap step without re-e
 
 If an input argument is a directory, vshrink recurses into it and converts every recognized video
 file it finds. Files whose names already contain the suffix are skipped to avoid re-encoding
-previously converted outputs. Directory input is not compatible with the `-output` option.
+previously converted outputs.
 
 Recognized video extensions: `.mp4`, `.mkv`, `.avi`, `.mov`, `.m4v`, `.wmv`, `.flv`, `.webm`,
 `.mpeg`, `.mpg`, `.ts`, `.m2ts`, `.vob`.

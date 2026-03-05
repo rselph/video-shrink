@@ -17,11 +17,6 @@ func TestOutputPath(t *testing.T) {
 		want   string
 	}{
 		{
-			name:   "explicit output overrides derivation",
-			config: vshrink.Config{Input: "/path/to/video.mp4", Output: "/other/output.mp4"},
-			want:   "/other/output.mp4",
-		},
-		{
 			name:   "default suffix inserted before extension",
 			config: vshrink.Config{Input: "/path/to/video.mp4"},
 			want:   "/path/to/video.vshrink.mp4",
@@ -70,13 +65,13 @@ func TestBuildArgs(t *testing.T) {
 			},
 		},
 		{
-			name:   "custom preset and explicit output",
-			config: vshrink.Config{Input: "video.mp4", Preset: "HQ 1080p30 Surround", Output: "out.mp4"},
+			name:   "custom preset applied",
+			config: vshrink.Config{Input: "video.mp4", Preset: "HQ 1080p30 Surround"},
 			want: []string{
 				"--preset-import-gui",
 				"--preset", "HQ 1080p30 Surround",
 				"-i", "video.mp4",
-				"-o", "out.mp4",
+				"-o", "video.vshrink.mp4",
 			},
 		},
 		{
@@ -162,22 +157,6 @@ func TestRun(t *testing.T) {
 		}
 	})
 
-	t.Run("returns error when output set and input is a directory", func(t *testing.T) {
-		dir := t.TempDir()
-		cfg := vshrink.Config{
-			Input:         dir,
-			Output:        "out.mp4",
-			HandbrakePath: "true",
-		}
-		err := vshrink.Run(cfg)
-		if err == nil {
-			t.Fatal("expected error when -output used with directory input, got nil")
-		}
-		if !strings.Contains(err.Error(), "output file cannot be specified") {
-			t.Errorf("error message %q does not mention output restriction", err.Error())
-		}
-	})
-
 	t.Run("directory mode processes video files without error", func(t *testing.T) {
 		dir := t.TempDir()
 		subDir := filepath.Join(dir, "sub")
@@ -231,7 +210,7 @@ func TestIsVideoFile(t *testing.T) {
 	}{
 		{"movie.mp4", true},
 		{"clip.mkv", true},
-		{"film.AVI", true},  // case-insensitive
+		{"film.AVI", true}, // case-insensitive
 		{"film.MOV", true},
 		{"doc.pdf", false},
 		{"readme.txt", false},
