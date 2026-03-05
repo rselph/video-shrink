@@ -54,6 +54,8 @@ type Config struct {
 	Verbose bool
 	// Progress enables progress output when true.
 	Progress bool
+	// KeepOnError prevents deletion of the output file when an error occurs.
+	KeepOnError bool
 }
 
 // OutputPath returns the output file path for the given config.
@@ -149,6 +151,9 @@ func runFile(c Config) error {
 	}
 	fmt.Println(strings.Join(cmd.Args, " "))
 	if err := cmd.Run(); err != nil {
+		if !c.KeepOnError {
+			os.Remove(OutputPath(c))
+		}
 		return fmt.Errorf("HandBrakeCLI failed: %w", err)
 	}
 	return nil
