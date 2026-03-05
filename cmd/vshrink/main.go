@@ -18,6 +18,7 @@ func main() {
 		verbose     bool
 		noProgress  bool
 		keepOnError bool
+		inPlace     bool
 	)
 
 	flag.StringVar(&output, "output", "", "Set output file name")
@@ -30,6 +31,7 @@ func main() {
 	flag.BoolVar(&verbose, "v", false, "verbose output")
 	flag.BoolVar(&noProgress, "no-progress", false, "disable progress output")
 	flag.BoolVar(&keepOnError, "keep", false, "keep output file on error instead of deleting it")
+	flag.BoolVar(&inPlace, "in-place", false, "replace original with output when output is smaller")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: vshrink [options] input-file\n\n")
@@ -53,6 +55,7 @@ func main() {
 		Verbose:       verbose,
 		Progress:      !noProgress,
 		KeepOnError:   keepOnError,
+		InPlace:       inPlace,
 	}
 
 	if err := vshrink.Run(cfg); err != nil {

@@ -58,6 +58,8 @@ type Config struct {
 	Progress bool
 	// KeepOnError prevents deletion of the output file when an error occurs.
 	KeepOnError bool
+	// InPlace replaces the original file with the output when the output is smaller.
+	InPlace bool
 }
 
 // OutputPath returns the output file path for the given config.
@@ -95,6 +97,9 @@ func BuildArgs(c Config) []string {
 // into it (see runDir).  It returns an error if HandBrakeCLI cannot be started
 // or exits with a non-zero status.
 func Run(c Config) error {
+	if c.InPlace && c.Output != "" {
+		return fmt.Errorf("-in-place and -output are mutually exclusive")
+	}
 	info, err := os.Stat(c.Input)
 	if err != nil {
 		return fmt.Errorf("cannot access input: %w", err)
@@ -162,9 +167,9 @@ func runFile(c Config) error {
 	// where a signal arrives before Notify is called.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-	defer signal.Stop(sigCh)
 
 	if err := cmd.Start(); err != nil {
+		signal.Stop(sigCh)
 		return fmt.Errorf("HandBrakeCLI failed to start: %w", err)
 	}
 
@@ -174,11 +179,107 @@ func runFile(c Config) error {
 		}
 	}()
 
-	if err := cmd.Wait(); err != nil {
+	err := cmd.Wait()
+	// Shut down the phase-1 signal handler before potentially entering swapInPlace,
+	// which installs its own handler. Stop then close so the goroutine exits cleanly.
+	signal.Stop(sigCh)
+	close(sigCh)
+
+	if err != nil {
 		if !c.KeepOnError {
 			os.Remove(OutputPath(c))
 		}
 		return fmt.Errorf("HandBrakeCLI failed: %w", err)
+	}
+
+	if c.InPlace {
+		return swapInPlace(c, OutputPath(c))
+	}
+	return nil
+}
+
+// swapInPlace replaces c.Input with outputPath if outputPath is smaller.
+// The swap is performed via three steps so the original is never destroyed
+// before a valid replacement exists:
+//
+//  1. Rename original → original.vshrink.orig   (backup)
+//  2. Rename output   → original                (promote)
+//  3. Remove backup                             (cleanup)
+//
+// A signal handler is installed before step 1. On interrupt, recovery is
+// determined by inspecting which files exist on disk.
+//
+//   - backup absent: nothing moved yet, or step 3 already finished — nothing to do.
+//   - backup present, output present: step 1 done, step 2 not yet.
+//     Rename backup → original.
+//   - backup present, output absent: step 2 done, step 3 not yet.
+//     Rename original → output, then backup → original.
+func swapInPlace(c Config, outputPath string) error {
+	origInfo, err := os.Stat(c.Input)
+	if err != nil {
+		return fmt.Errorf("in-place: cannot stat original: %w", err)
+	}
+	newInfo, err := os.Stat(outputPath)
+	if err != nil {
+		return fmt.Errorf("in-place: cannot stat output: %w", err)
+	}
+	if newInfo.Size() >= origInfo.Size() {
+		fmt.Printf("in-place: output is not smaller; discarding %s\n", outputPath)
+		os.Remove(outputPath)
+		return nil
+	}
+
+	backupPath := c.Input + ".vshrink.orig"
+	if _, err := os.Stat(backupPath); err == nil {
+		return fmt.Errorf("in-place: backup path already exists: %s", backupPath)
+	}
+
+	// Register signal handler before any renames so no interrupt can slip through.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+
+	go func() {
+		if _, ok := <-sigCh; !ok {
+			return
+		}
+		// Determine recovery action from filesystem state.  The three cases are mutually exclusive:
+		//
+		//   backupPath absent: nothing has moved yet (or step 3 already finished).
+		//   backupPath present, outputPath present: step 1 done, step 2 not yet.
+		//     → rename backup back to original.
+		//   backupPath present, outputPath absent: step 2 done, step 3 not yet.
+		//     → rename original back to outputPath, then backup back to original.
+		_, backupErr := os.Stat(backupPath)
+		_, outputErr := os.Stat(outputPath)
+		if backupErr == nil && outputErr == nil {
+			// Original is at backupPath; encoded file is still at outputPath.
+			os.Rename(backupPath, c.Input)
+		} else if backupErr == nil && outputErr != nil {
+			// Encoded file has been promoted to c.Input; original is at backupPath.
+			os.Rename(c.Input, outputPath)
+			os.Rename(backupPath, c.Input)
+		}
+		os.Exit(1)
+	}()
+
+	// Step 1: move original out of the way.
+	if err := os.Rename(c.Input, backupPath); err != nil {
+		return fmt.Errorf("in-place: cannot move original to backup: %w", err)
+	}
+
+	// Step 2: promote the output to the original name.
+	if err := os.Rename(outputPath, c.Input); err != nil {
+		// Undo step 1 so the original is restored.
+		if rerr := os.Rename(backupPath, c.Input); rerr != nil {
+			return fmt.Errorf("in-place: rename failed (%w) and could not restore original: %v", err, rerr)
+		}
+		return fmt.Errorf("in-place: cannot rename output to original: %w", err)
+	}
+
+	// Step 3: remove the backup.
+	if err := os.Remove(backupPath); err != nil {
+		fmt.Printf("in-place: warning: could not remove backup %s: %v\n", backupPath, err)
 	}
 	return nil
 }
