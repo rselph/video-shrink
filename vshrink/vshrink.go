@@ -161,6 +161,7 @@ func runFile(c Config) error {
 	if c.Verbose {
 		cmd.Stderr = os.Stderr
 	}
+	fmt.Println()
 	fmt.Println(strings.Join(cmd.Args, " "))
 
 	// Set up signal handling before starting the process to avoid a race
