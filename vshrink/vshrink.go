@@ -146,6 +146,9 @@ func runDir(c Config) error {
 // runFile invokes HandBrakeCLI for a single input file described by c.
 func runFile(c Config) error {
 	if _, err := os.Stat(OutputPath(c)); err == nil {
+		if c.InPlace {
+			return swapInPlace(c, OutputPath(c))
+		}
 		fmt.Printf("skipping %s: output file already exists\n", c.Input)
 		return nil
 	}
