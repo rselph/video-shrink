@@ -15,6 +15,7 @@ const (
 	DefaultSuffix    = ".vshrink"
 	DefaultPreset    = "vshrink"
 	DefaultHandbrake = "HandBrakeCLI"
+	MarkerPrefix     = ".vshrink.done."
 )
 
 // VideoExtensions is the set of file extensions recognised as video files.
@@ -77,7 +78,7 @@ func OutputPath(c Config) string {
 // same directory as c.Input, named ".vshrink.done." followed by the input
 // file's base name.
 func MarkerPath(c Config) string {
-	return filepath.Join(filepath.Dir(c.Input), ".vshrink.done."+filepath.Base(c.Input))
+	return filepath.Join(filepath.Dir(c.Input), MarkerPrefix+filepath.Base(c.Input))
 }
 
 // BuildArgs returns the HandBrakeCLI argument list for the given config.
@@ -127,12 +128,19 @@ func runDir(c Config) error {
 		if !IsVideoFile(path) {
 			return nil
 		}
+
 		// Skip files that already carry the suffix (previously converted outputs).
 		ext := filepath.Ext(path)
 		base := strings.TrimSuffix(path, ext)
 		if strings.HasSuffix(base, suffix) {
 			return nil
 		}
+
+		// Skip marker files created by in-place replacements.
+		if strings.HasPrefix(filepath.Base(path), MarkerPrefix) {
+			return nil
+		}
+
 		fileCfg := c
 		fileCfg.Input = path
 		return runFile(fileCfg)
@@ -141,6 +149,11 @@ func runDir(c Config) error {
 
 // runFile invokes HandBrakeCLI for a single input file described by c.
 func runFile(c Config) error {
+	if _, err := os.Stat(MarkerPath(c)); err == nil {
+		fmt.Printf("skipping %s: marker file exists\n", c.Input)
+		return nil
+	}
+
 	if _, err := os.Stat(OutputPath(c)); err == nil {
 		if c.InPlace {
 			return swapInPlace(c, OutputPath(c))
@@ -225,6 +238,7 @@ func swapInPlace(c Config, outputPath string) error {
 	}
 	if newInfo.Size() >= origInfo.Size() {
 		fmt.Printf("in-place: output is not smaller; discarding %s\n", outputPath)
+		markComplete(c)
 		os.Remove(outputPath)
 		return nil
 	}
@@ -283,11 +297,18 @@ func swapInPlace(c Config, outputPath string) error {
 	}
 
 	// Create a marker file to record that this file has been processed.
+	markComplete(c)
+
+	return nil
+}
+
+// markComplete creates the marker file returned by MarkerPath to signal that
+// in-place processing has finished for c.Input.  Failure is non-fatal: a
+// warning is printed and the function returns normally.
+func markComplete(c Config) {
 	if f, err := os.Create(MarkerPath(c)); err == nil {
 		f.Close()
 	} else {
-		fmt.Printf("in-place: warning: could not create marker file %s: %v\n", MarkerPath(c), err)
+		fmt.Printf("warning: could not create marker file %s: %v\n", MarkerPath(c), err)
 	}
-
-	return nil
 }
