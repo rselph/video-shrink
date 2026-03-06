@@ -2,6 +2,7 @@
 package vshrink
 
 import (
+	_ "embed"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,6 +11,9 @@ import (
 	"strings"
 	"syscall"
 )
+
+//go:embed vshrink.json
+var PresetData []byte
 
 const (
 	DefaultSuffix    = ".vshrink"

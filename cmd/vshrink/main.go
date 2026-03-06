@@ -19,6 +19,7 @@ func main() {
 		keepOnError     bool
 		inPlace         bool
 		continueOnError bool
+		printPreset     bool
 	)
 
 	flag.StringVar(&suffix, "suffix", vshrink.DefaultSuffix, "Suffix inserted before the file extension")
@@ -31,6 +32,7 @@ func main() {
 	flag.BoolVar(&keepOnError, "keep", false, "keep output file on error instead of deleting it")
 	flag.BoolVar(&inPlace, "in-place", false, "replace original with output when output is smaller")
 	flag.BoolVar(&continueOnError, "continue", false, "continue processing other files on error")
+	flag.BoolVar(&printPreset, "print-preset", false, "print the suggested HandBrake preset JSON and exit")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: vshrink [options] input-file [input-file...]\n\n")
 		fmt.Fprintf(os.Stderr, "Options:\n")
@@ -38,6 +40,11 @@ func main() {
 	}
 
 	flag.Parse()
+
+	if printPreset {
+		fmt.Println(string(vshrink.PresetData))
+		os.Exit(0)
+	}
 
 	if flag.NArg() < 1 {
 		flag.Usage()
