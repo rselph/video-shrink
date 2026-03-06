@@ -18,6 +18,7 @@ func main() {
 		noProgress      bool
 		keepOnError     bool
 		inPlace         bool
+		ignoreSize      bool
 		continueOnError bool
 		printPreset     bool
 	)
@@ -31,6 +32,7 @@ func main() {
 	flag.BoolVar(&noProgress, "no-progress", false, "disable progress output")
 	flag.BoolVar(&keepOnError, "keep", false, "keep output file on error instead of deleting it")
 	flag.BoolVar(&inPlace, "in-place", false, "replace original with output when output is smaller")
+	flag.BoolVar(&ignoreSize, "ignore-size", false, "with -in-place, replace original even if output is larger")
 	flag.BoolVar(&continueOnError, "continue", false, "continue processing other files on error")
 	flag.BoolVar(&printPreset, "print-preset", false, "print the suggested HandBrake preset JSON and exit")
 	flag.Usage = func() {
@@ -62,6 +64,7 @@ func main() {
 			Progress:      !noProgress,
 			KeepOnError:   keepOnError,
 			InPlace:       inPlace,
+			IgnoreSize:    ignoreSize,
 		}
 
 		if err := vshrink.Run(cfg); err != nil {

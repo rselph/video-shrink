@@ -63,6 +63,8 @@ type Config struct {
 	KeepOnError bool
 	// InPlace replaces the original file with the output when the output is smaller.
 	InPlace bool
+	// IgnoreSize replaces the original even when the output is larger.
+	IgnoreSize bool
 }
 
 // OutputPath returns the output file path for the given config,
@@ -240,7 +242,7 @@ func swapInPlace(c Config, outputPath string) error {
 	if err != nil {
 		return fmt.Errorf("in-place: cannot stat output: %w", err)
 	}
-	if newInfo.Size() >= origInfo.Size() {
+	if !c.IgnoreSize && newInfo.Size() >= origInfo.Size() {
 		fmt.Printf("in-place: output is not smaller; discarding %s\n", outputPath)
 		markComplete(c)
 		os.Remove(outputPath)

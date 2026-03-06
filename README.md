@@ -18,7 +18,7 @@ without either the original file or the final shrunken file. It's also designed 
 it again and again on the same directory without doing any harm. When a file is processed, vshrink
 leaves an empty file with a name like `.vshrink.done.movie.mp4` in the same directory. This
 instructs it to leave that file alone. Sometimes, the re-encoded file will actually be larger than
-the original. When this happens, vshrink leaves the original in place.
+the original. When this happens, vshrink leaves the original in place unless `-ignore-size` is set.
 
 ### Directory Input
 
@@ -59,6 +59,7 @@ vshrink [options] input-file [input-file...]
 | `-p`, `-preset` | `vshrink` | Name of the HandBrake preset to use |
 | `-handbrake` | `HandBrakeCLI` | Path to the HandBrakeCLI executable |
 | `-in-place` | false | Replace the original file with the output when the output is smaller |
+| `-ignore-size` | false | With `-in-place`, replace the original even if the output is larger |
 | `-keep` | false | Keep the output file when something goes wrong instead of deleting it |
 | `-continue` | false | Continue processing remaining files after an error |
 | `-v` | false | Verbose output (show HandBrakeCLI stderr) |
