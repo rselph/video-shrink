@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rselph/video-shrink/vshrink"
+	"github.com/rselph/video-shrink/impl/vshrink"
 )
 
 func TestOutputPath(t *testing.T) {
