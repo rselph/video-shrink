@@ -46,3 +46,12 @@ output is smaller. If the output is not smaller, it is discarded and the origina
 
 The swap is done safely in three steps so the original is never destroyed before a valid replacement
 exists. If the process is interrupted mid-swap, vshrink attempts to restore the original file.
+
+Vshrink will also place a marker file (starting with ".vshrink.done") to indicate that it has
+already processed a video.  This way, you can run it many times over the same directory, and it will
+skip the files that have already been shrunk.  It won't encode them twice.
+
+## Setting Up Your Preset in HandBrake
+
+By default, vshrink will look for a preset named "vshrink" from the HandBrake UI to do the encoding.
+This allows you to set things up just the way you want.
