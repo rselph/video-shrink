@@ -244,7 +244,7 @@ func swapInPlace(c Config, outputPath string) error {
 	}
 	if !c.IgnoreSize && newInfo.Size() >= origInfo.Size() {
 		fmt.Printf("in-place: output is not smaller; discarding %s\n", outputPath)
-		markComplete(c)
+		markComplete(c, origInfo, newInfo)
 		os.Remove(outputPath)
 		return nil
 	}
@@ -303,7 +303,7 @@ func swapInPlace(c Config, outputPath string) error {
 	}
 
 	// Create a marker file to record that this file has been processed.
-	markComplete(c)
+	markComplete(c, origInfo, newInfo)
 
 	return nil
 }
@@ -311,10 +311,16 @@ func swapInPlace(c Config, outputPath string) error {
 // markComplete creates the marker file returned by MarkerPath to signal that
 // in-place processing has finished for c.Input.  Failure is non-fatal: a
 // warning is printed and the function returns normally.
-func markComplete(c Config) {
-	if f, err := os.Create(MarkerPath(c)); err == nil {
-		f.Close()
-	} else {
+func markComplete(c Config, origInfo, newInfo os.FileInfo) {
+	f, err := os.Create(MarkerPath(c))
+	if err != nil {
 		fmt.Printf("warning: could not create marker file %s: %v\n", MarkerPath(c), err)
+		return
+	}
+	defer f.Close()
+	fmt.Fprintf(f, "original size: %d, new size: %d (%02f%%)\n",
+		origInfo.Size(), newInfo.Size(), float64(newInfo.Size())/float64(origInfo.Size())*100)
+	if newInfo.Size() >= origInfo.Size() {
+		fmt.Fprintf(f, "warning: marker file created even though output is not smaller\n")
 	}
 }
