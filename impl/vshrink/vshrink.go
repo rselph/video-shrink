@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 )
 
 //go:embed vshrink.json
@@ -155,12 +156,17 @@ func runDir(c Config) error {
 
 // runFile invokes HandBrakeCLI for a single input file described by c.
 func runFile(c Config) error {
-	if _, err := os.Stat(MarkerPath(c)); err == nil {
+	markerInfo, _ := os.Stat(MarkerPath(c))
+	inInfo, _ := os.Stat(c.Input)
+	outInfo, _ := os.Stat(OutputPath(c))
+
+	if markerInfo != nil && inInfo.ModTime().Sub(markerInfo.ModTime()) < 1*time.Minute {
+		// Marker exists, and is not older than the input file.
 		fmt.Printf("skipping %s: marker file exists\n", c.Input)
 		return nil
 	}
 
-	if _, err := os.Stat(OutputPath(c)); err == nil {
+	if outInfo != nil {
 		if c.InPlace {
 			return swapInPlace(c, OutputPath(c))
 		}
