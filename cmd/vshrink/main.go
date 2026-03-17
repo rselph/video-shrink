@@ -56,15 +56,16 @@ func main() {
 	exitVal := 0
 	for _, arg := range flag.Args() {
 		cfg := vshrink.Config{
-			Input:         arg,
-			Suffix:        suffix,
-			Preset:        preset,
-			HandbrakePath: handbrake,
-			Verbose:       verbose,
-			Progress:      !noProgress,
-			KeepOnError:   keepOnError,
-			InPlace:       inPlace,
-			IgnoreSize:    ignoreSize,
+			Input:           arg,
+			Suffix:          suffix,
+			Preset:          preset,
+			HandbrakePath:   handbrake,
+			Verbose:         verbose,
+			Progress:        !noProgress,
+			KeepOnError:     keepOnError,
+			InPlace:         inPlace,
+			IgnoreSize:      ignoreSize,
+			ContinueOnError: continueOnError,
 		}
 
 		if err := vshrink.Run(cfg); err != nil {

@@ -66,6 +66,8 @@ type Config struct {
 	InPlace bool
 	// IgnoreSize replaces the original even when the output is larger.
 	IgnoreSize bool
+	// ContinueOnError continues processing files in a directory even when an error occurs.
+	ContinueOnError bool
 }
 
 // OutputPath returns the output file path for the given config,
@@ -125,7 +127,8 @@ func runDir(c Config) error {
 	if suffix == "" {
 		suffix = DefaultSuffix
 	}
-	return filepath.WalkDir(c.Input, func(path string, d os.DirEntry, err error) error {
+	var lastErr error
+	err := filepath.WalkDir(c.Input, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -150,8 +153,20 @@ func runDir(c Config) error {
 
 		fileCfg := c
 		fileCfg.Input = path
-		return runFile(fileCfg)
+		err = runFile(fileCfg)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error processing %s: %v\n", path, err)
+			lastErr = err
+			if !c.ContinueOnError {
+				return err
+			}
+		}
+		return nil
 	})
+	if lastErr != nil {
+		return lastErr
+	}
+	return err
 }
 
 // runFile invokes HandBrakeCLI for a single input file described by c.
