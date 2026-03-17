@@ -205,19 +205,20 @@ func runFile(c Config) error {
 
 	// Set up signal handling before starting the process to avoid a race
 	// where a signal arrives before Notify is called.
+	killed := false
 	sigCh := make(chan os.Signal, 1)
+	go func() {
+		if _, ok := <-sigCh; ok {
+			cmd.Process.Kill()
+			killed = true
+		}
+	}()
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 
 	if err := cmd.Start(); err != nil {
 		signal.Stop(sigCh)
 		return fmt.Errorf("HandBrakeCLI failed to start: %w", err)
 	}
-
-	go func() {
-		if _, ok := <-sigCh; ok {
-			cmd.Process.Kill()
-		}
-	}()
 
 	err := cmd.Wait()
 	// Shut down the phase-1 signal handler before potentially entering swapInPlace,
@@ -228,6 +229,9 @@ func runFile(c Config) error {
 	if err != nil {
 		if !c.KeepOnError {
 			os.Remove(OutputPath(c))
+		}
+		if killed {
+			os.Exit(1)
 		}
 		return fmt.Errorf("HandBrakeCLI failed: %w", err)
 	}
@@ -277,9 +281,6 @@ func swapInPlace(c Config, outputPath string) error {
 
 	// Register signal handler before any renames so no interrupt can slip through.
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-	defer signal.Stop(sigCh)
-
 	go func() {
 		if _, ok := <-sigCh; !ok {
 			return
@@ -303,6 +304,8 @@ func swapInPlace(c Config, outputPath string) error {
 		}
 		os.Exit(1)
 	}()
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
 
 	// Step 1: move original out of the way.
 	if err := os.Rename(c.Input, backupPath); err != nil {
