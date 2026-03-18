@@ -20,7 +20,9 @@ const (
 	DefaultSuffix    = ".vshrink"
 	DefaultPreset    = "vshrink"
 	DefaultHandbrake = "HandBrakeCLI"
-	MarkerPrefix     = ".vshrink.done."
+	OldMarkerPrefix  = ".vshrink.done."
+	MarkerPrefix     = ".vshrink."
+	MarkerSuffix     = ".done"
 )
 
 // VideoExtensions is the set of file extensions recognised as video files.
@@ -87,7 +89,41 @@ func OutputPath(c Config) string {
 // same directory as c.Input, named ".vshrink.done." followed by the input
 // file's base name.
 func MarkerPath(c Config) string {
-	return filepath.Join(filepath.Dir(c.Input), MarkerPrefix+filepath.Base(c.Input))
+	return filepath.Join(filepath.Dir(c.Input), MarkerPrefix+filepath.Base(c.Input)+MarkerSuffix)
+}
+
+// LegacyMarkerPath returns the path of the old-format marker file, which has the form
+// ".vshrink.done." followed by the input file's base name.  This is checked by IsMarkerFile for
+// robustness against changes in the naming scheme.
+func LegacyMarkerPath(c Config) string {
+	return filepath.Join(filepath.Dir(c.Input), OldMarkerPrefix+filepath.Base(c.Input))
+}
+
+// IsMarkerFile returns true when path has the form of a marker file created by swapInPlace. It will
+// detect both the current marker format (".vshrink.<basename>.done") and the old format
+// (".vshrink.done.<basename>") to be robust against changes in the naming scheme.
+func IsMarkerFile(path string) bool {
+	base := filepath.Base(path)
+	return strings.HasPrefix(base, MarkerPrefix) && strings.HasSuffix(base, MarkerSuffix) ||
+		strings.HasPrefix(base, OldMarkerPrefix)
+}
+
+// IsMarked returns true if either the current or legacy marker file exists for c.Input, indicating
+// that in-place processing has completed for that file.
+func IsMarked(c Config) bool {
+	_, err := MarkerInfo(c)
+	return err == nil
+}
+
+// MarkerInfo returns the os.FileInfo for the marker file associated with c.Input, checking both the
+// current and legacy marker paths.  If neither exists, it returns an error from the second Stat
+// call.
+func MarkerInfo(c Config) (os.FileInfo, error) {
+	info, err := os.Stat(MarkerPath(c))
+	if err == nil {
+		return info, nil
+	}
+	return os.Stat(LegacyMarkerPath(c))
 }
 
 // BuildArgs returns the HandBrakeCLI argument list for the given config.
@@ -146,8 +182,8 @@ func runDir(c Config) error {
 			return nil
 		}
 
-		// Skip marker files created by in-place replacements.
-		if strings.HasPrefix(filepath.Base(path), MarkerPrefix) {
+		// Skip legacy marker files created by in-place replacements.
+		if IsMarkerFile(path) {
 			return nil
 		}
 
@@ -171,7 +207,7 @@ func runDir(c Config) error {
 
 // runFile invokes HandBrakeCLI for a single input file described by c.
 func runFile(c Config) error {
-	markerInfo, _ := os.Stat(MarkerPath(c))
+	markerInfo, _ := MarkerInfo(c)
 	inInfo, _ := os.Stat(c.Input)
 	outInfo, _ := os.Stat(OutputPath(c))
 

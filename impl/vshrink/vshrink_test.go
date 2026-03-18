@@ -250,22 +250,22 @@ func TestMarkerPath(t *testing.T) {
 		{
 			name:   "basic file",
 			config: vshrink.Config{Input: "/path/to/video.mp4"},
-			want:   "/path/to/" + vshrink.MarkerPrefix + "video.mp4",
+			want:   "/path/to/" + vshrink.MarkerPrefix + "video.mp4" + vshrink.MarkerSuffix,
 		},
 		{
 			name:   "file in current directory",
 			config: vshrink.Config{Input: "movie.mkv"},
-			want:   vshrink.MarkerPrefix + "movie.mkv",
+			want:   vshrink.MarkerPrefix + "movie.mkv" + vshrink.MarkerSuffix,
 		},
 		{
 			name:   "file without extension",
 			config: vshrink.Config{Input: "/dir/video"},
-			want:   "/dir/" + vshrink.MarkerPrefix + "video",
+			want:   "/dir/" + vshrink.MarkerPrefix + "video" + vshrink.MarkerSuffix,
 		},
 		{
 			name:   "nested path",
 			config: vshrink.Config{Input: "/a/b/c/clip.avi"},
-			want:   "/a/b/c/" + vshrink.MarkerPrefix + "clip.avi",
+			want:   "/a/b/c/" + vshrink.MarkerPrefix + "clip.avi" + vshrink.MarkerSuffix,
 		},
 	}
 	for _, tt := range tests {
@@ -275,6 +275,176 @@ func TestMarkerPath(t *testing.T) {
 				t.Errorf("MarkerPath() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestLegacyMarkerPath(t *testing.T) {
+	tests := []struct {
+		name   string
+		config vshrink.Config
+		want   string
+	}{
+		{
+			name:   "basic file",
+			config: vshrink.Config{Input: "/path/to/video.mp4"},
+			want:   "/path/to/" + vshrink.OldMarkerPrefix + "video.mp4",
+		},
+		{
+			name:   "file in current directory",
+			config: vshrink.Config{Input: "movie.mkv"},
+			want:   vshrink.OldMarkerPrefix + "movie.mkv",
+		},
+		{
+			name:   "nested path",
+			config: vshrink.Config{Input: "/a/b/c/clip.avi"},
+			want:   "/a/b/c/" + vshrink.OldMarkerPrefix + "clip.avi",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := vshrink.LegacyMarkerPath(tt.config)
+			if got != tt.want {
+				t.Errorf("LegacyMarkerPath() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsMarkerFile(t *testing.T) {
+	tests := []struct {
+		path string
+		want bool
+	}{
+		// New format: .vshrink.<basename>.done
+		{".vshrink.video.mp4.done", true},
+		{"/path/to/.vshrink.clip.mkv.done", true},
+		{".vshrink.file.done", true},
+		// Old format: .vshrink.done.<basename>
+		{".vshrink.done.video.mp4", true},
+		{"/path/to/.vshrink.done.clip.mkv", true},
+		{".vshrink.done.file", true},
+		// Old format with video extension (key backward compat case)
+		{".vshrink.done.video.ts", true},
+		// Not a marker
+		{"video.mp4", false},
+		{".vshrink.video.mp4", false}, // prefix but no .done suffix
+		{"something.done", false},     // suffix but no .vshrink. prefix
+		{"movie.vshrink.mp4", false},  // output file, not a marker
+		{"", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			got := vshrink.IsMarkerFile(tt.path)
+			if got != tt.want {
+				t.Errorf("IsMarkerFile(%q) = %v, want %v", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsMarkedAndMarkerInfo(t *testing.T) {
+	t.Run("returns true for current marker", func(t *testing.T) {
+		dir := t.TempDir()
+		input := filepath.Join(dir, "video.mp4")
+		if err := os.WriteFile(input, []byte("data"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		cfg := vshrink.Config{Input: input}
+		if err := os.WriteFile(vshrink.MarkerPath(cfg), []byte{}, 0644); err != nil {
+			t.Fatal(err)
+		}
+		if !vshrink.IsMarked(cfg) {
+			t.Error("IsMarked() should return true when current marker exists")
+		}
+		info, err := vshrink.MarkerInfo(cfg)
+		if err != nil {
+			t.Errorf("MarkerInfo() returned unexpected error: %v", err)
+		}
+		if info == nil {
+			t.Error("MarkerInfo() returned nil FileInfo")
+		}
+	})
+
+	t.Run("returns true for legacy marker", func(t *testing.T) {
+		dir := t.TempDir()
+		input := filepath.Join(dir, "video.mp4")
+		if err := os.WriteFile(input, []byte("data"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		cfg := vshrink.Config{Input: input}
+		if err := os.WriteFile(vshrink.LegacyMarkerPath(cfg), []byte{}, 0644); err != nil {
+			t.Fatal(err)
+		}
+		if !vshrink.IsMarked(cfg) {
+			t.Error("IsMarked() should return true when legacy marker exists")
+		}
+		info, err := vshrink.MarkerInfo(cfg)
+		if err != nil {
+			t.Errorf("MarkerInfo() returned unexpected error: %v", err)
+		}
+		if info == nil {
+			t.Error("MarkerInfo() returned nil FileInfo")
+		}
+	})
+
+	t.Run("returns false when no marker exists", func(t *testing.T) {
+		dir := t.TempDir()
+		input := filepath.Join(dir, "video.mp4")
+		if err := os.WriteFile(input, []byte("data"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		cfg := vshrink.Config{Input: input}
+		if vshrink.IsMarked(cfg) {
+			t.Error("IsMarked() should return false when no marker exists")
+		}
+		_, err := vshrink.MarkerInfo(cfg)
+		if err == nil {
+			t.Error("MarkerInfo() should return error when no marker exists")
+		}
+	})
+
+	t.Run("prefers current marker over legacy", func(t *testing.T) {
+		dir := t.TempDir()
+		input := filepath.Join(dir, "video.mp4")
+		if err := os.WriteFile(input, []byte("data"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		cfg := vshrink.Config{Input: input}
+		// Create both markers.
+		if err := os.WriteFile(vshrink.MarkerPath(cfg), []byte("current"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(vshrink.LegacyMarkerPath(cfg), []byte("legacy"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		info, err := vshrink.MarkerInfo(cfg)
+		if err != nil {
+			t.Fatalf("MarkerInfo() returned unexpected error: %v", err)
+		}
+		// The current marker should be returned (it has the new-format name).
+		if info.Name() != filepath.Base(vshrink.MarkerPath(cfg)) {
+			t.Errorf("MarkerInfo() returned %q, expected current marker %q", info.Name(), filepath.Base(vshrink.MarkerPath(cfg)))
+		}
+	})
+}
+
+func TestRunSkipsWhenLegacyMarkerExists(t *testing.T) {
+	dir := t.TempDir()
+	input := filepath.Join(dir, "video.mp4")
+	if err := os.WriteFile(input, []byte("original"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// Create only the legacy marker file.
+	cfg := vshrink.Config{Input: input}
+	legacyMarker := vshrink.LegacyMarkerPath(cfg)
+	if err := os.WriteFile(legacyMarker, []byte{}, 0644); err != nil {
+		t.Fatal(err)
+	}
+	// Use 'false' as the HandBrakeCLI stand-in. If the file is not skipped
+	// 'false' will cause Run to return an error.
+	cfg.HandbrakePath = "false"
+	if err := vshrink.Run(cfg); err != nil {
+		t.Errorf("Run() should skip file with legacy marker, got error: %v", err)
 	}
 }
 
@@ -481,21 +651,39 @@ func TestRunKeepOnErrorRetainsOutput(t *testing.T) {
 }
 
 func TestRunDirSkipsMarkerFiles(t *testing.T) {
-	dir := t.TempDir()
-	// Place a marker-like file that has a video extension.
-	// e.g. .vshrink.done.video.ts (the .ts extension is a video extension)
-	markerFile := filepath.Join(dir, vshrink.MarkerPrefix+"video.ts")
-	if err := os.WriteFile(markerFile, []byte{}, 0644); err != nil {
-		t.Fatal(err)
-	}
-	// If the file is not skipped, 'false' will cause an error.
-	cfg := vshrink.Config{
-		Input:         dir,
-		HandbrakePath: "false",
-	}
-	if err := vshrink.Run(cfg); err != nil {
-		t.Errorf("Run() should skip marker files, got error: %v", err)
-	}
+	t.Run("skips new-format marker with video extension", func(t *testing.T) {
+		dir := t.TempDir()
+		// New-format markers end in .done so they won't pass IsVideoFile,
+		// but verify they are also caught by IsMarkerFile.
+		markerFile := filepath.Join(dir, vshrink.MarkerPrefix+"video.ts"+vshrink.MarkerSuffix)
+		if err := os.WriteFile(markerFile, []byte{}, 0644); err != nil {
+			t.Fatal(err)
+		}
+		cfg := vshrink.Config{
+			Input:         dir,
+			HandbrakePath: "false",
+		}
+		if err := vshrink.Run(cfg); err != nil {
+			t.Errorf("Run() should skip new-format marker files, got error: %v", err)
+		}
+	})
+
+	t.Run("skips legacy marker with video extension", func(t *testing.T) {
+		dir := t.TempDir()
+		// Legacy markers like .vshrink.done.video.ts end in .ts which is a video extension,
+		// so IsMarkerFile must catch them before they reach HandBrakeCLI.
+		markerFile := filepath.Join(dir, vshrink.OldMarkerPrefix+"video.ts")
+		if err := os.WriteFile(markerFile, []byte{}, 0644); err != nil {
+			t.Fatal(err)
+		}
+		cfg := vshrink.Config{
+			Input:         dir,
+			HandbrakePath: "false",
+		}
+		if err := vshrink.Run(cfg); err != nil {
+			t.Errorf("Run() should skip legacy marker files, got error: %v", err)
+		}
+	})
 }
 
 func TestRunInPlaceBackupAlreadyExists(t *testing.T) {
