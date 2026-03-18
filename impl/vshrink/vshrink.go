@@ -203,8 +203,8 @@ func runFile(c Config) error {
 	fmt.Println()
 	fmt.Println(strings.Join(cmd.Args, " "))
 
-	// Set up signal handling before starting the process to avoid a race
-	// where a signal arrives before Notify is called.
+	// Set up signal handling before starting the process. If an interrupt is received, kill the
+	// HandBrakeCLI process and set a flag.
 	killed := false
 	sigCh := make(chan os.Signal, 1)
 	go func() {
@@ -217,11 +217,12 @@ func runFile(c Config) error {
 
 	if err := cmd.Start(); err != nil {
 		signal.Stop(sigCh)
+		close(sigCh)
 		return fmt.Errorf("HandBrakeCLI failed to start: %w", err)
 	}
 
 	err := cmd.Wait()
-	// Shut down the phase-1 signal handler before potentially entering swapInPlace,
+	// Shut down the signal handler before potentially entering swapInPlace,
 	// which installs its own handler. Stop then close so the goroutine exits cleanly.
 	signal.Stop(sigCh)
 	close(sigCh)
@@ -230,10 +231,13 @@ func runFile(c Config) error {
 		if !c.KeepOnError {
 			os.Remove(OutputPath(c))
 		}
-		if killed {
-			os.Exit(1)
+		if !killed {
+			return fmt.Errorf("HandBrakeCLI failed: %w", err)
 		}
-		return fmt.Errorf("HandBrakeCLI failed: %w", err)
+	}
+
+	if killed {
+		os.Exit(1)
 	}
 
 	if c.InPlace {
@@ -302,10 +306,16 @@ func swapInPlace(c Config, outputPath string) error {
 			os.Rename(c.Input, outputPath)
 			os.Rename(backupPath, c.Input)
 		}
+
+		// Remove marker file if it exists, since in-place processing did not complete.
+		os.Remove(MarkerPath(c))
 		os.Exit(1)
 	}()
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-	defer signal.Stop(sigCh)
+	defer func() {
+		signal.Stop(sigCh)
+		close(sigCh)
+	}()
 
 	// Step 1: move original out of the way.
 	if err := os.Rename(c.Input, backupPath); err != nil {
@@ -321,13 +331,22 @@ func swapInPlace(c Config, outputPath string) error {
 		return fmt.Errorf("in-place: cannot rename output to original: %w", err)
 	}
 
+	// Create a marker file to record that this file has been processed.
+	if err := markComplete(c, origInfo, newInfo); err != nil {
+		fmt.Printf("in-place: warning: could not create marker file: %v\n", err)
+		// Restore original, so we don't double encode on the next run.  This is a best effort
+		// attempt, so if it fails we just print a warning and leave the files as they are.
+		err2 := os.Rename(backupPath, c.Input)
+		if err2 != nil {
+			fmt.Printf("in-place: warning: could not restore original after marker creation failure: %v\n", err2)
+		}
+		return err
+	}
+
 	// Step 3: remove the backup.
 	if err := os.Remove(backupPath); err != nil {
 		fmt.Printf("in-place: warning: could not remove backup %s: %v\n", backupPath, err)
 	}
-
-	// Create a marker file to record that this file has been processed.
-	markComplete(c, origInfo, newInfo)
 
 	return nil
 }
@@ -335,11 +354,10 @@ func swapInPlace(c Config, outputPath string) error {
 // markComplete creates the marker file returned by MarkerPath to signal that
 // in-place processing has finished for c.Input.  Failure is non-fatal: a
 // warning is printed and the function returns normally.
-func markComplete(c Config, origInfo, newInfo os.FileInfo) {
+func markComplete(c Config, origInfo, newInfo os.FileInfo) error {
 	f, err := os.Create(MarkerPath(c))
 	if err != nil {
-		fmt.Printf("warning: could not create marker file %s: %v\n", MarkerPath(c), err)
-		return
+		return err
 	}
 	defer f.Close()
 	fmt.Fprintf(f, "original size: %d, new size: %d (%02f%%)\n",
@@ -347,4 +365,5 @@ func markComplete(c Config, origInfo, newInfo os.FileInfo) {
 	if newInfo.Size() >= origInfo.Size() {
 		fmt.Fprintf(f, "warning: marker file created even though output is not smaller\n")
 	}
+	return nil
 }
