@@ -396,10 +396,11 @@ func markComplete(c Config, origInfo, newInfo os.FileInfo) error {
 		return err
 	}
 	defer f.Close()
-	fmt.Fprintf(f, "original size: %d, new size: %d (%02f%%)\n",
+	fmt.Fprintf(f, "original size: %d, new size: %d (%02f%%)",
 		origInfo.Size(), newInfo.Size(), float64(newInfo.Size())/float64(origInfo.Size())*100)
 	if newInfo.Size() >= origInfo.Size() {
-		fmt.Fprintf(f, "warning: marker file created even though output is not smaller\n")
+		fmt.Fprintf(f, " (not replaced)")
 	}
+	fmt.Fprintln(f)
 	return nil
 }
