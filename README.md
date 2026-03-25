@@ -16,9 +16,13 @@ directory with `.vshrink` inserted before the file extension (e.g. `movie.mp4` â
 shrinking the file in place. It tries to make sure that nothing will go wrong that will leave you
 without either the original file or the final shrunken file. It's also designed so that you can run
 it again and again on the same directory without doing any harm. When a file is processed, vshrink
-leaves an empty file with a name like `.vshrink.done.movie.mp4` in the same directory. This
-instructs it to leave that file alone. Sometimes, the re-encoded file will actually be larger than
-the original. When this happens, vshrink leaves the original in place unless `-ignore-size` is set.
+records an extended attribute (`user.com.rselph.vshrink.done`) on the video file itself to remember
+that it has already been handled. On filesystems that don't support extended attributes (e.g.
+Windows/NTFS), vshrink falls back to an empty marker file named `.vshrink.<filename>.done` in the
+same directory. Old-format marker files (`.vshrink.done.<filename>`) are also recognised and are
+automatically upgraded to extended attributes when possible. Sometimes, the re-encoded file will
+actually be larger than the original. When this happens, vshrink leaves the original in place unless
+`-ignore-size` is set.
 
 ### Directory Input
 
