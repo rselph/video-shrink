@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
-	"time"
 )
 
 //go:embed vshrink.json
@@ -108,24 +107,6 @@ func IsMarkerFile(path string) bool {
 		strings.HasPrefix(base, OldMarkerPrefix)
 }
 
-// IsMarked returns true if either the current or legacy marker file exists for c.Input, indicating
-// that in-place processing has completed for that file.
-func IsMarked(c Config) bool {
-	_, err := MarkerInfo(c)
-	return err == nil
-}
-
-// MarkerInfo returns the os.FileInfo for the marker file associated with c.Input, checking both the
-// current and legacy marker paths.  If neither exists, it returns an error from the second Stat
-// call.
-func MarkerInfo(c Config) (os.FileInfo, error) {
-	info, err := os.Stat(MarkerPath(c))
-	if err == nil {
-		return info, nil
-	}
-	return os.Stat(LegacyMarkerPath(c))
-}
-
 // BuildArgs returns the HandBrakeCLI argument list for the given config.
 func BuildArgs(c Config) []string {
 	preset := c.Preset
@@ -207,13 +188,10 @@ func runDir(c Config) error {
 
 // runFile invokes HandBrakeCLI for a single input file described by c.
 func runFile(c Config) error {
-	markerInfo, _ := MarkerInfo(c)
-	inInfo, _ := os.Stat(c.Input)
 	outInfo, _ := os.Stat(OutputPath(c))
 
-	if markerInfo != nil && inInfo.ModTime().Sub(markerInfo.ModTime()) < 1*time.Minute {
-		// Marker exists, and is not older than the input file.
-		fmt.Printf("skipping %s: marker file exists\n", c.Input)
+	if IsMarked(c) {
+		fmt.Printf("skipping %s: already processed\n", c.Input)
 		return nil
 	}
 
@@ -309,7 +287,7 @@ func swapInPlace(c Config, outputPath string) error {
 	}
 	if !c.IgnoreSize && newInfo.Size() >= origInfo.Size() {
 		fmt.Printf("in-place: output is not smaller; discarding %s\n", outputPath)
-		markComplete(c, origInfo, newInfo)
+		MarkComplete(c, origInfo, newInfo)
 		os.Remove(outputPath)
 		return nil
 	}
@@ -343,8 +321,9 @@ func swapInPlace(c Config, outputPath string) error {
 			os.Rename(backupPath, c.Input)
 		}
 
-		// Remove marker file if it exists, since in-place processing did not complete.
+		// Remove marker/xattr if it exists, since in-place processing did not complete.
 		os.Remove(MarkerPath(c))
+		RemoveXattr(c.Input)
 		os.Exit(1)
 	}()
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
@@ -367,9 +346,9 @@ func swapInPlace(c Config, outputPath string) error {
 		return fmt.Errorf("in-place: cannot rename output to original: %w", err)
 	}
 
-	// Create a marker file to record that this file has been processed.
-	if err := markComplete(c, origInfo, newInfo); err != nil {
-		fmt.Printf("in-place: warning: could not create marker file: %v\n", err)
+	// Record that this file has been processed.
+	if err := MarkComplete(c, origInfo, newInfo); err != nil {
+		fmt.Printf("in-place: warning: could not create marker: %v\n", err)
 		// Restore original, so we don't double encode on the next run.  This is a best effort
 		// attempt, so if it fails we just print a warning and leave the files as they are.
 		err2 := os.Rename(backupPath, c.Input)
@@ -384,23 +363,5 @@ func swapInPlace(c Config, outputPath string) error {
 		fmt.Printf("in-place: warning: could not remove backup %s: %v\n", backupPath, err)
 	}
 
-	return nil
-}
-
-// markComplete creates the marker file returned by MarkerPath to signal that
-// in-place processing has finished for c.Input.  Failure is non-fatal: a
-// warning is printed and the function returns normally.
-func markComplete(c Config, origInfo, newInfo os.FileInfo) error {
-	f, err := os.Create(MarkerPath(c))
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	fmt.Fprintf(f, "original size: %d, new size: %d (%02f%%)",
-		origInfo.Size(), newInfo.Size(), float64(newInfo.Size())/float64(origInfo.Size())*100)
-	if newInfo.Size() >= origInfo.Size() {
-		fmt.Fprintf(f, " (not replaced)")
-	}
-	fmt.Fprintln(f)
 	return nil
 }

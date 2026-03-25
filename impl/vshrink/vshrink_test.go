@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rselph/video-shrink/impl/vshrink"
 )
@@ -342,7 +343,29 @@ func TestIsMarkerFile(t *testing.T) {
 	}
 }
 
-func TestIsMarkedAndMarkerInfo(t *testing.T) {
+func TestIsMarkedAndMarkerTime(t *testing.T) {
+	t.Run("returns true for xattr", func(t *testing.T) {
+		dir := t.TempDir()
+		input := filepath.Join(dir, "video.mp4")
+		if err := os.WriteFile(input, []byte("data"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		cfg := vshrink.Config{Input: input}
+		if err := vshrink.SetXattr(input, vshrink.FormatXattrValue(time.Now(), "test")); err != nil {
+			t.Fatal(err)
+		}
+		if !vshrink.IsMarked(cfg) {
+			t.Error("IsMarked() should return true when xattr exists")
+		}
+		mt, err := vshrink.MarkerTime(cfg)
+		if err != nil {
+			t.Errorf("MarkerTime() returned unexpected error: %v", err)
+		}
+		if mt.IsZero() {
+			t.Error("MarkerTime() returned zero time")
+		}
+	})
+
 	t.Run("returns true for current marker", func(t *testing.T) {
 		dir := t.TempDir()
 		input := filepath.Join(dir, "video.mp4")
@@ -356,12 +379,12 @@ func TestIsMarkedAndMarkerInfo(t *testing.T) {
 		if !vshrink.IsMarked(cfg) {
 			t.Error("IsMarked() should return true when current marker exists")
 		}
-		info, err := vshrink.MarkerInfo(cfg)
+		mt, err := vshrink.MarkerTime(cfg)
 		if err != nil {
-			t.Errorf("MarkerInfo() returned unexpected error: %v", err)
+			t.Errorf("MarkerTime() returned unexpected error: %v", err)
 		}
-		if info == nil {
-			t.Error("MarkerInfo() returned nil FileInfo")
+		if mt.IsZero() {
+			t.Error("MarkerTime() returned zero time")
 		}
 	})
 
@@ -378,12 +401,12 @@ func TestIsMarkedAndMarkerInfo(t *testing.T) {
 		if !vshrink.IsMarked(cfg) {
 			t.Error("IsMarked() should return true when legacy marker exists")
 		}
-		info, err := vshrink.MarkerInfo(cfg)
+		mt, err := vshrink.MarkerTime(cfg)
 		if err != nil {
-			t.Errorf("MarkerInfo() returned unexpected error: %v", err)
+			t.Errorf("MarkerTime() returned unexpected error: %v", err)
 		}
-		if info == nil {
-			t.Error("MarkerInfo() returned nil FileInfo")
+		if mt.IsZero() {
+			t.Error("MarkerTime() returned zero time")
 		}
 	})
 
@@ -397,33 +420,76 @@ func TestIsMarkedAndMarkerInfo(t *testing.T) {
 		if vshrink.IsMarked(cfg) {
 			t.Error("IsMarked() should return false when no marker exists")
 		}
-		_, err := vshrink.MarkerInfo(cfg)
+		_, err := vshrink.MarkerTime(cfg)
 		if err == nil {
-			t.Error("MarkerInfo() should return error when no marker exists")
+			t.Error("MarkerTime() should return error when no marker exists")
 		}
 	})
 
-	t.Run("prefers current marker over legacy", func(t *testing.T) {
+	t.Run("xattr preferred over marker files", func(t *testing.T) {
 		dir := t.TempDir()
 		input := filepath.Join(dir, "video.mp4")
 		if err := os.WriteFile(input, []byte("data"), 0644); err != nil {
 			t.Fatal(err)
 		}
 		cfg := vshrink.Config{Input: input}
-		// Create both markers.
+		// Create both an xattr and a marker file with different timestamps.
+		xattrTime := time.Now().Add(-30 * time.Second)
+		if err := vshrink.SetXattr(input, vshrink.FormatXattrValue(xattrTime, "test")); err != nil {
+			t.Fatal(err)
+		}
 		if err := os.WriteFile(vshrink.MarkerPath(cfg), []byte("current"), 0644); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(vshrink.LegacyMarkerPath(cfg), []byte("legacy"), 0644); err != nil {
+		mt, err := vshrink.MarkerTime(cfg)
+		if err != nil {
+			t.Fatalf("MarkerTime() returned unexpected error: %v", err)
+		}
+		// MarkerTime should return the xattr timestamp, not the marker file mtime.
+		if mt.Sub(xattrTime).Abs() > time.Second {
+			t.Errorf("MarkerTime() = %v, expected close to xattr time %v", mt, xattrTime)
+		}
+	})
+
+	t.Run("stale marker returns false", func(t *testing.T) {
+		dir := t.TempDir()
+		input := filepath.Join(dir, "video.mp4")
+		if err := os.WriteFile(input, []byte("data"), 0644); err != nil {
 			t.Fatal(err)
 		}
-		info, err := vshrink.MarkerInfo(cfg)
-		if err != nil {
-			t.Fatalf("MarkerInfo() returned unexpected error: %v", err)
+		// Set the video file mtime far into the future.
+		future := time.Now().Add(10 * time.Minute)
+		if err := os.Chtimes(input, future, future); err != nil {
+			t.Fatal(err)
 		}
-		// The current marker should be returned (it has the new-format name).
-		if info.Name() != filepath.Base(vshrink.MarkerPath(cfg)) {
-			t.Errorf("MarkerInfo() returned %q, expected current marker %q", info.Name(), filepath.Base(vshrink.MarkerPath(cfg)))
+		cfg := vshrink.Config{Input: input}
+		// Create a marker file with the default (current) mtime.
+		if err := os.WriteFile(vshrink.MarkerPath(cfg), []byte{}, 0644); err != nil {
+			t.Fatal(err)
+		}
+		if vshrink.IsMarked(cfg) {
+			t.Error("IsMarked() should return false when marker is stale")
+		}
+	})
+
+	t.Run("stale xattr returns false", func(t *testing.T) {
+		dir := t.TempDir()
+		input := filepath.Join(dir, "video.mp4")
+		if err := os.WriteFile(input, []byte("data"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		// Set the video file mtime far into the future.
+		future := time.Now().Add(10 * time.Minute)
+		if err := os.Chtimes(input, future, future); err != nil {
+			t.Fatal(err)
+		}
+		cfg := vshrink.Config{Input: input}
+		// Set an xattr with the current (non-future) time.
+		if err := vshrink.SetXattr(input, vshrink.FormatXattrValue(time.Now(), "test")); err != nil {
+			t.Fatal(err)
+		}
+		if vshrink.IsMarked(cfg) {
+			t.Error("IsMarked() should return false when xattr timestamp is stale")
 		}
 	})
 }
@@ -528,9 +594,9 @@ func TestRunInPlaceSwapsWhenOutputSmaller(t *testing.T) {
 	if _, err := os.Stat(output); !os.IsNotExist(err) {
 		t.Errorf("output file should be gone after swap, stat err = %v", err)
 	}
-	// Marker file should exist.
-	if _, err := os.Stat(vshrink.MarkerPath(cfg)); err != nil {
-		t.Errorf("marker file should exist after swap: %v", err)
+	// File should be marked (xattr or marker file).
+	if !vshrink.IsMarked(cfg) {
+		t.Error("file should be marked after swap")
 	}
 }
 
@@ -563,9 +629,9 @@ func TestRunInPlaceDiscardsWhenOutputLarger(t *testing.T) {
 	if _, err := os.Stat(output); !os.IsNotExist(err) {
 		t.Errorf("larger output should be removed, stat err = %v", err)
 	}
-	// Marker file should still be created (to prevent reprocessing).
-	if _, err := os.Stat(vshrink.MarkerPath(cfg)); err != nil {
-		t.Errorf("marker file should exist even when output was discarded: %v", err)
+	// File should still be marked (to prevent reprocessing).
+	if !vshrink.IsMarked(cfg) {
+		t.Error("file should be marked even when output was discarded")
 	}
 }
 
