@@ -233,6 +233,30 @@ func TestMarkCompleteWritesXattr(t *testing.T) {
 	}
 }
 
+func TestMarkSkippedWritesXattr(t *testing.T) {
+	dir := t.TempDir()
+	input := filepath.Join(dir, "video.mp4")
+	if err := os.WriteFile(input, []byte("data"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := vshrink.Config{Input: input}
+
+	if err := vshrink.MarkSkipped(cfg); err != nil {
+		t.Fatalf("MarkSkipped() error: %v", err)
+	}
+
+	value, err := vshrink.GetXattr(input)
+	if err != nil {
+		t.Fatalf("GetXattr() error: %v", err)
+	}
+	if _, err := vshrink.ParseXattrTimestamp(value); err != nil {
+		t.Fatalf("ParseXattrTimestamp() error: %v", err)
+	}
+	if !vshrink.IsMarked(cfg) {
+		t.Error("IsMarked() should return true after MarkSkipped")
+	}
+}
+
 func TestIsMarkedUpgradesOnRead(t *testing.T) {
 	dir := t.TempDir()
 	input := filepath.Join(dir, "video.mp4")

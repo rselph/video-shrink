@@ -21,6 +21,7 @@ func main() {
 		ignoreSize      bool
 		continueOnError bool
 		printPreset     bool
+		markOnly        bool
 	)
 
 	flag.StringVar(&suffix, "suffix", vshrink.DefaultSuffix, "Suffix inserted before the file extension")
@@ -34,6 +35,7 @@ func main() {
 	flag.BoolVar(&inPlace, "in-place", false, "replace original with output when output is smaller")
 	flag.BoolVar(&ignoreSize, "ignore-size", false, "with -in-place, replace original even if output is larger")
 	flag.BoolVar(&continueOnError, "continue", false, "continue processing other files on error")
+	flag.BoolVar(&markOnly, "mark", false, "mark files as processed without encoding them")
 	flag.BoolVar(&printPreset, "print-preset", false, "print the suggested HandBrake preset JSON and exit")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: vshrink [options] input-file [input-file...]\n\n")
@@ -66,6 +68,7 @@ func main() {
 			InPlace:         inPlace,
 			IgnoreSize:      ignoreSize,
 			ContinueOnError: continueOnError,
+			MarkOnly:        markOnly,
 		}
 
 		if err := vshrink.Run(cfg); err != nil {

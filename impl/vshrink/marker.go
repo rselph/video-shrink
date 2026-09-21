@@ -176,6 +176,22 @@ func MarkComplete(c Config, origInfo, newInfo os.FileInfo) error {
 	return writeMarkerFile(c, content)
 }
 
+// MarkSkipped records c.Input as processed without it having been encoded,
+// so later runs leave it alone.  Like MarkComplete, it falls back to a marker
+// file if xattrs are not supported.
+func MarkSkipped(c Config) error {
+	info, err := os.Stat(c.Input)
+	if err != nil {
+		return err
+	}
+	content := "marked without processing"
+	err = SetXattr(c.Input, FormatXattrValue(info.ModTime(), content))
+	if err == nil || !isXattrNotSupported(err) {
+		return err
+	}
+	return writeMarkerFile(c, content)
+}
+
 // UpgradeMarker migrates a marker file to an xattr.  If the xattr is
 // written successfully the marker file(s) are deleted.  If xattrs are not
 // supported the marker file is left in place.

@@ -716,6 +716,57 @@ func TestRunKeepOnErrorRetainsOutput(t *testing.T) {
 	}
 }
 
+func TestRunMarkOnly(t *testing.T) {
+	dir := t.TempDir()
+	input := filepath.Join(dir, "video.mp4")
+	if err := os.WriteFile(input, []byte("original"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// Use 'false' — if HandBrakeCLI is invoked, Run returns an error.
+	cfg := vshrink.Config{Input: input, HandbrakePath: "false", MarkOnly: true}
+	if err := vshrink.Run(cfg); err != nil {
+		t.Fatalf("Run() with MarkOnly error: %v", err)
+	}
+	if !vshrink.IsMarked(cfg) {
+		t.Error("file should be marked after Run() with MarkOnly")
+	}
+	if _, err := os.Stat(vshrink.OutputPath(cfg)); !os.IsNotExist(err) {
+		t.Errorf("output file should not exist, stat err = %v", err)
+	}
+	if data, _ := os.ReadFile(input); string(data) != "original" {
+		t.Errorf("input should be unchanged, got %q", data)
+	}
+
+	// A normal run afterwards should skip the file.
+	cfg.MarkOnly = false
+	cfg.InPlace = true
+	if err := vshrink.Run(cfg); err != nil {
+		t.Errorf("Run() should skip marked file, got error: %v", err)
+	}
+}
+
+func TestRunMarkOnlyDir(t *testing.T) {
+	dir := t.TempDir()
+	videos := []string{filepath.Join(dir, "a.mp4"), filepath.Join(dir, "sub", "b.mkv")}
+	for _, v := range videos {
+		if err := os.MkdirAll(filepath.Dir(v), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(v, []byte("original"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg := vshrink.Config{Input: dir, HandbrakePath: "false", MarkOnly: true}
+	if err := vshrink.Run(cfg); err != nil {
+		t.Fatalf("Run() with MarkOnly on dir error: %v", err)
+	}
+	for _, v := range videos {
+		if !vshrink.IsMarked(vshrink.Config{Input: v}) {
+			t.Errorf("%s should be marked", v)
+		}
+	}
+}
+
 func TestRunDirSkipsMarkerFiles(t *testing.T) {
 	t.Run("skips new-format marker with video extension", func(t *testing.T) {
 		dir := t.TempDir()

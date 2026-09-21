@@ -24,6 +24,10 @@ automatically upgraded to extended attributes when possible. Sometimes, the re-e
 actually be larger than the original. When this happens, vshrink leaves the original in place unless
 `-ignore-size` is set.
 
+- When `-mark` is set, vshrink doesn't encode anything. It just records the same "already processed"
+marker on each file, so future runs (including `-in-place` runs) leave those files alone. Files that
+are already marked are left as they are.
+
 ### Directory Input
 
 If an input argument is a directory, vshrink recurses into it and converts every recognized video
@@ -65,6 +69,7 @@ vshrink [options] input-file [input-file...]
 | `-in-place` | false | Replace the original file with the output when the output is smaller |
 | `-ignore-size` | false | With `-in-place`, replace the original even if the output is larger |
 | `-keep` | false | Keep the output file when something goes wrong instead of deleting it |
+| `-mark` | false | Mark files as processed without encoding them, so later runs skip them |
 | `-continue` | false | Continue processing remaining files after an error |
 | `-v` | false | Verbose output (show HandBrakeCLI stderr) |
 | `-no-progress` | false | Disable progress output (suppress HandBrakeCLI stdout) |

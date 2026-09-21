@@ -69,6 +69,8 @@ type Config struct {
 	IgnoreSize bool
 	// ContinueOnError continues processing files in a directory even when an error occurs.
 	ContinueOnError bool
+	// MarkOnly records the file as processed without encoding it, so later runs skip it.
+	MarkOnly bool
 }
 
 // OutputPath returns the output file path for the given config,
@@ -193,6 +195,11 @@ func runFile(c Config) error {
 	if IsMarked(c) {
 		fmt.Printf("skipping %s: already processed\n", c.Input)
 		return nil
+	}
+
+	if c.MarkOnly {
+		fmt.Printf("marking %s as processed\n", c.Input)
+		return MarkSkipped(c)
 	}
 
 	if outInfo != nil {
