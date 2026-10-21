@@ -19,6 +19,7 @@ const (
 	DefaultSuffix    = ".vshrink"
 	DefaultPreset    = "vshrink"
 	DefaultHandbrake = "HandBrakeCLI"
+	DefaultFFmpeg    = "ffmpeg"
 	OldMarkerPrefix  = ".vshrink.done."
 	MarkerPrefix     = ".vshrink."
 	MarkerSuffix     = ".done"
@@ -57,6 +58,8 @@ type Config struct {
 	Preset string
 	// HandbrakePath is the path to the HandBrakeCLI executable.
 	HandbrakePath string
+	// FFmpegPath is the path to the ffmpeg executable used for the remux pass.
+	FFmpegPath string
 	// Verbose enables verbose output when true.
 	Verbose bool
 	// Progress enables progress output when true.
@@ -83,6 +86,20 @@ func OutputPath(c Config) string {
 	ext := filepath.Ext(c.Input)
 	base := strings.TrimSuffix(c.Input, ext)
 	return base + suffix + ext
+}
+
+// TempPath returns the path HandBrakeCLI writes to before the ffmpeg remux pass
+// produces the final output.  It is derived from c.Input by inserting ".tmp"
+// followed by c.Suffix before the file extension, so the base name still ends
+// with the suffix and runDir skips any leftover temp files.
+func TempPath(c Config) string {
+	suffix := c.Suffix
+	if suffix == "" {
+		suffix = DefaultSuffix
+	}
+	ext := filepath.Ext(c.Input)
+	base := strings.TrimSuffix(c.Input, ext)
+	return base + ".tmp" + suffix + ext
 }
 
 // MarkerPath returns the path of the sentinel file written by swapInPlace after
@@ -119,14 +136,26 @@ func BuildArgs(c Config) []string {
 		"--preset-import-gui",
 		"--preset", preset,
 		"-i", c.Input,
-		"-o", OutputPath(c),
+		"-o", TempPath(c),
+	}
+}
+
+// BuildRemuxArgs returns the ffmpeg argument list that remuxes the HandBrakeCLI
+// output into the final output file with fully interleaved tracks.
+func BuildRemuxArgs(c Config) []string {
+	return []string{
+		"-i", TempPath(c),
+		"-map", "0",
+		"-c", "copy",
+		"-max_interleave_delta", "0",
+		OutputPath(c),
 	}
 }
 
 // Run invokes HandBrakeCLI with the settings in c, streaming its output to
-// the process's stdout and stderr.  When c.Input is a directory it recurses
-// into it (see runDir).  It returns an error if HandBrakeCLI cannot be started
-// or exits with a non-zero status.
+// the process's stdout and stderr, then remuxes the result with ffmpeg.  When
+// c.Input is a directory it recurses into it (see runDir).  It returns an error
+// if HandBrakeCLI or ffmpeg cannot be started or exits with a non-zero status.
 func Run(c Config) error {
 	info, err := os.Stat(c.Input)
 	if err != nil {
@@ -188,7 +217,8 @@ func runDir(c Config) error {
 	return err
 }
 
-// runFile invokes HandBrakeCLI for a single input file described by c.
+// runFile invokes HandBrakeCLI for a single input file described by c, writing
+// to TempPath(c), then remuxes that file with ffmpeg into OutputPath(c).
 func runFile(c Config) error {
 	outInfo, _ := os.Stat(OutputPath(c))
 
@@ -210,6 +240,15 @@ func runFile(c Config) error {
 		return nil
 	}
 
+	// Check for ffmpeg up front so a missing executable doesn't waste a long encode.
+	ffmpeg := c.FFmpegPath
+	if ffmpeg == "" {
+		ffmpeg = DefaultFFmpeg
+	}
+	if _, err := exec.LookPath(ffmpeg); err != nil {
+		return fmt.Errorf("ffmpeg not found: %w", err)
+	}
+
 	handbrake := c.HandbrakePath
 	if handbrake == "" {
 		handbrake = DefaultHandbrake
@@ -224,11 +263,56 @@ func runFile(c Config) error {
 	fmt.Println()
 	fmt.Println(strings.Join(cmd.Args, " "))
 
-	// Set up signal handling before starting the process. If an interrupt is received, kill the
-	// HandBrakeCLI process and set a flag.
-	killed := false
+	killed, err := runCmd(cmd)
+	if err != nil {
+		if !c.KeepOnError {
+			os.Remove(TempPath(c))
+		}
+		if !killed {
+			return fmt.Errorf("HandBrakeCLI failed: %w", err)
+		}
+	}
+	if killed {
+		os.Exit(1)
+	}
+
+	// Remux so the audio and video tracks are fully interleaved.
+	cmd = exec.Command(ffmpeg, BuildRemuxArgs(c)...)
+	if c.Verbose {
+		cmd.Stderr = os.Stderr
+	}
+	fmt.Println(strings.Join(cmd.Args, " "))
+
+	killed, err = runCmd(cmd)
+	if err != nil {
+		if !c.KeepOnError {
+			os.Remove(OutputPath(c))
+			os.Remove(TempPath(c))
+		}
+		if !killed {
+			return fmt.Errorf("ffmpeg remux failed: %w", err)
+		}
+	}
+	if killed {
+		os.Exit(1)
+	}
+	os.Remove(TempPath(c))
+
+	if c.InPlace {
+		return swapInPlace(c, OutputPath(c))
+	}
+	return nil
+}
+
+// runCmd starts cmd and waits for it to finish.  While it runs, an interrupt
+// or SIGTERM kills the process and killed is reported as true.  The signal
+// handler is shut down before returning, so callers such as swapInPlace can
+// install their own.
+func runCmd(cmd *exec.Cmd) (killed bool, err error) {
 	sigCh := make(chan os.Signal, 1)
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		if _, ok := <-sigCh; ok {
 			cmd.Process.Kill()
 			killed = true
@@ -239,32 +323,16 @@ func runFile(c Config) error {
 	if err := cmd.Start(); err != nil {
 		signal.Stop(sigCh)
 		close(sigCh)
-		return fmt.Errorf("HandBrakeCLI failed to start: %w", err)
+		<-done
+		return false, fmt.Errorf("failed to start: %w", err)
 	}
 
-	err := cmd.Wait()
-	// Shut down the signal handler before potentially entering swapInPlace,
-	// which installs its own handler. Stop then close so the goroutine exits cleanly.
+	err = cmd.Wait()
+	// Stop then close so the goroutine exits cleanly.
 	signal.Stop(sigCh)
 	close(sigCh)
-
-	if err != nil {
-		if !c.KeepOnError {
-			os.Remove(OutputPath(c))
-		}
-		if !killed {
-			return fmt.Errorf("HandBrakeCLI failed: %w", err)
-		}
-	}
-
-	if killed {
-		os.Exit(1)
-	}
-
-	if c.InPlace {
-		return swapInPlace(c, OutputPath(c))
-	}
-	return nil
+	<-done
+	return killed, err
 }
 
 // swapInPlace replaces c.Input with outputPath if outputPath is smaller.

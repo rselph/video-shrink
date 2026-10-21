@@ -63,7 +63,7 @@ func TestBuildArgs(t *testing.T) {
 				"--preset-import-gui",
 				"--preset", vshrink.DefaultPreset,
 				"-i", "video.mp4",
-				"-o", "video.vshrink.mp4",
+				"-o", "video.tmp.vshrink.mp4",
 			},
 		},
 		{
@@ -73,7 +73,7 @@ func TestBuildArgs(t *testing.T) {
 				"--preset-import-gui",
 				"--preset", "HQ 1080p30 Surround",
 				"-i", "video.mp4",
-				"-o", "video.vshrink.mp4",
+				"-o", "video.tmp.vshrink.mp4",
 			},
 		},
 		{
@@ -83,7 +83,7 @@ func TestBuildArgs(t *testing.T) {
 				"--preset-import-gui",
 				"--preset", vshrink.DefaultPreset,
 				"-i", "/movies/film.avi",
-				"-o", "/movies/film.enc.avi",
+				"-o", "/movies/film.tmp.enc.avi",
 			},
 		},
 	}
@@ -103,6 +103,7 @@ func TestRun(t *testing.T) {
 		cfg := vshrink.Config{
 			Input:         "video.mp4",
 			HandbrakePath: "/nonexistent/HandBrakeCLI",
+			FFmpegPath:    "true",
 		}
 		err := vshrink.Run(cfg)
 		if err == nil {
@@ -117,10 +118,11 @@ func TestRun(t *testing.T) {
 		if err := os.WriteFile(input, []byte{}, 0644); err != nil {
 			t.Fatal(err)
 		}
-		// Use the system 'true' command as a stand-in for HandBrakeCLI.
+		// Use the system 'true' command as a stand-in for HandBrakeCLI and ffmpeg.
 		cfg := vshrink.Config{
 			Input:         input,
 			HandbrakePath: "true",
+			FFmpegPath:    "true",
 		}
 		if err := vshrink.Run(cfg); err != nil {
 			t.Errorf("Run() returned unexpected error: %v", err)
@@ -149,6 +151,7 @@ func TestRun(t *testing.T) {
 		cfg := vshrink.Config{
 			Input:         input,
 			HandbrakePath: "false",
+			FFmpegPath:    "true",
 		}
 		err := vshrink.Run(cfg)
 		if err == nil {
@@ -180,6 +183,7 @@ func TestRun(t *testing.T) {
 		cfg := vshrink.Config{
 			Input:         dir,
 			HandbrakePath: "true",
+			FFmpegPath:    "true",
 		}
 		if err := vshrink.Run(cfg); err != nil {
 			t.Errorf("Run() on directory returned unexpected error: %v", err)
@@ -668,7 +672,7 @@ func TestRunCleansUpOutputOnError(t *testing.T) {
 	if err := os.WriteFile(input, []byte{}, 0644); err != nil {
 		t.Fatal(err)
 	}
-	// Script creates the output file ($7) then exits 1 to simulate a failed encode.
+	// Script creates the temp output file ($7) then exits 1 to simulate a failed encode.
 	script := filepath.Join(dir, "fail.sh")
 	if err := os.WriteFile(script, []byte("#!/bin/sh\ntouch \"$7\"\nexit 1\n"), 0755); err != nil {
 		t.Fatal(err)
@@ -676,9 +680,10 @@ func TestRunCleansUpOutputOnError(t *testing.T) {
 	cfg := vshrink.Config{
 		Input:         input,
 		HandbrakePath: script,
+		FFmpegPath:    "true",
 		KeepOnError:   false,
 	}
-	output := vshrink.OutputPath(cfg)
+	output := vshrink.TempPath(cfg)
 	err := vshrink.Run(cfg)
 	if err == nil {
 		t.Fatal("expected error from failing HandBrakeCLI")
@@ -695,7 +700,7 @@ func TestRunKeepOnErrorRetainsOutput(t *testing.T) {
 	if err := os.WriteFile(input, []byte{}, 0644); err != nil {
 		t.Fatal(err)
 	}
-	// Script creates the output file ($7) then exits 1.
+	// Script creates the temp output file ($7) then exits 1.
 	script := filepath.Join(dir, "fail-with-output.sh")
 	if err := os.WriteFile(script, []byte("#!/bin/sh\ntouch \"$7\"\nexit 1\n"), 0755); err != nil {
 		t.Fatal(err)
@@ -703,9 +708,10 @@ func TestRunKeepOnErrorRetainsOutput(t *testing.T) {
 	cfg := vshrink.Config{
 		Input:         input,
 		HandbrakePath: script,
+		FFmpegPath:    "true",
 		KeepOnError:   true,
 	}
-	output := vshrink.OutputPath(cfg)
+	output := vshrink.TempPath(cfg)
 	err := vshrink.Run(cfg)
 	if err == nil {
 		t.Fatal("expected error from failing HandBrakeCLI")
@@ -882,5 +888,131 @@ func TestBuildArgsDefaultPreset(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("BuildArgs with empty preset should use DefaultPreset %q, got %v", vshrink.DefaultPreset, args)
+	}
+}
+
+func TestTempPath(t *testing.T) {
+	tests := []struct {
+		name   string
+		config vshrink.Config
+		want   string
+	}{
+		{
+			name:   "default suffix",
+			config: vshrink.Config{Input: "/path/to/video.mp4"},
+			want:   "/path/to/video.tmp.vshrink.mp4",
+		},
+		{
+			name:   "custom suffix",
+			config: vshrink.Config{Input: "/path/to/video.mkv", Suffix: ".small"},
+			want:   "/path/to/video.tmp.small.mkv",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := vshrink.TempPath(tt.config)
+			if got != tt.want {
+				t.Errorf("TempPath() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildRemuxArgs(t *testing.T) {
+	c := vshrink.Config{Input: "/movies/film.mp4"}
+	want := []string{
+		"-i", "/movies/film.tmp.vshrink.mp4",
+		"-map", "0",
+		"-c", "copy",
+		"-max_interleave_delta", "0",
+		"/movies/film.vshrink.mp4",
+	}
+	if got := vshrink.BuildRemuxArgs(c); !reflect.DeepEqual(got, want) {
+		t.Errorf("BuildRemuxArgs() = %v, want %v", got, want)
+	}
+}
+
+// writeScript writes an executable shell script to dir and returns its path.
+func writeScript(t *testing.T, dir, name, body string) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body), 0755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestRunRemuxesToOutput(t *testing.T) {
+	dir := t.TempDir()
+	input := filepath.Join(dir, "video.mp4")
+	if err := os.WriteFile(input, []byte{}, 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := vshrink.Config{
+		Input: input,
+		// HandBrakeCLI stand-in writes the temp file ($7).
+		HandbrakePath: writeScript(t, dir, "hb.sh", "echo encoded > \"$7\"\n"),
+		// ffmpeg stand-in copies its input ($2) to its output ($9).
+		FFmpegPath: writeScript(t, dir, "ff.sh", "cp \"$2\" \"$9\"\n"),
+	}
+	if err := vshrink.Run(cfg); err != nil {
+		t.Fatalf("Run() returned unexpected error: %v", err)
+	}
+	data, err := os.ReadFile(vshrink.OutputPath(cfg))
+	if err != nil {
+		t.Fatalf("output file should exist after remux: %v", err)
+	}
+	if string(data) != "encoded\n" {
+		t.Errorf("output content = %q, want %q", data, "encoded\n")
+	}
+	if _, err := os.Stat(vshrink.TempPath(cfg)); !os.IsNotExist(err) {
+		t.Errorf("temp file should be removed after remux, stat err = %v", err)
+	}
+}
+
+func TestRunRemuxFailureCleansUp(t *testing.T) {
+	dir := t.TempDir()
+	input := filepath.Join(dir, "video.mp4")
+	if err := os.WriteFile(input, []byte{}, 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := vshrink.Config{
+		Input:         input,
+		HandbrakePath: writeScript(t, dir, "hb.sh", "touch \"$7\"\n"),
+		// ffmpeg stand-in creates a partial output ($9) then fails.
+		FFmpegPath: writeScript(t, dir, "ff.sh", "touch \"$9\"\nexit 1\n"),
+	}
+	err := vshrink.Run(cfg)
+	if err == nil {
+		t.Fatal("expected error from failing ffmpeg")
+	}
+	if !strings.Contains(err.Error(), "ffmpeg remux failed") {
+		t.Errorf("error message %q does not contain %q", err.Error(), "ffmpeg remux failed")
+	}
+	for _, p := range []string{vshrink.OutputPath(cfg), vshrink.TempPath(cfg)} {
+		if _, statErr := os.Stat(p); !os.IsNotExist(statErr) {
+			t.Errorf("%s should be removed on remux error, stat err = %v", p, statErr)
+		}
+	}
+}
+
+func TestRunMissingFFmpegSkipsEncode(t *testing.T) {
+	dir := t.TempDir()
+	input := filepath.Join(dir, "video.mp4")
+	if err := os.WriteFile(input, []byte{}, 0644); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := filepath.Join(dir, "handbrake-ran")
+	cfg := vshrink.Config{
+		Input:         input,
+		HandbrakePath: writeScript(t, dir, "hb.sh", "touch \""+sentinel+"\"\n"),
+		FFmpegPath:    "/nonexistent/ffmpeg",
+	}
+	if err := vshrink.Run(cfg); err == nil {
+		t.Fatal("expected error for missing ffmpeg, got nil")
+	}
+	if _, err := os.Stat(sentinel); !os.IsNotExist(err) {
+		t.Error("HandBrakeCLI should not run when ffmpeg is missing")
 	}
 }

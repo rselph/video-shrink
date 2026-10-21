@@ -14,6 +14,7 @@ func main() {
 		suffix          string
 		preset          string
 		handbrake       string
+		ffmpeg          string
 		verbose         bool
 		noProgress      bool
 		keepOnError     bool
@@ -29,6 +30,7 @@ func main() {
 	flag.StringVar(&preset, "preset", vshrink.DefaultPreset, "Name of the HandBrake preset to use")
 	flag.StringVar(&preset, "p", vshrink.DefaultPreset, "Name of the HandBrake preset to use (shorthand)")
 	flag.StringVar(&handbrake, "handbrake", vshrink.DefaultHandbrake, "Path to the HandBrakeCLI executable")
+	flag.StringVar(&ffmpeg, "ffmpeg", vshrink.DefaultFFmpeg, "Path to the ffmpeg executable")
 	flag.BoolVar(&verbose, "v", false, "verbose output")
 	flag.BoolVar(&noProgress, "no-progress", false, "disable progress output")
 	flag.BoolVar(&keepOnError, "keep", false, "keep output file on error instead of deleting it")
@@ -62,6 +64,7 @@ func main() {
 			Suffix:          suffix,
 			Preset:          preset,
 			HandbrakePath:   handbrake,
+			FFmpegPath:      ffmpeg,
 			Verbose:         verbose,
 			Progress:        !noProgress,
 			KeepOnError:     keepOnError,

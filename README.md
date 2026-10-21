@@ -12,6 +12,12 @@ There are two ways that you might want to use vshrink.
 directory with `.vshrink` inserted before the file extension (e.g. `movie.mp4` →
 `movie.vshrink.mp4`). If the output file already exists, it does nothing.
 
+- After each encode, vshrink remuxes the result with
+[ffmpeg](https://ffmpeg.org) (`-map 0 -c copy -max_interleave_delta 0`) so the audio and video
+tracks are fully interleaved, which avoids caching problems in some players. HandBrake writes to a
+temporary file (e.g. `movie.tmp.vshrink.mp4`). The final output file only appears once the remux has
+finished, and the temporary file is then deleted. Nothing is re-encoded during the remux.
+
 - When `-in-place` is set, vshrink tries to replace the original file with the new file, effectively
 shrinking the file in place. It tries to make sure that nothing will go wrong that will leave you
 without either the original file or the final shrunken file. It's also designed so that you can run
@@ -45,6 +51,13 @@ it at the [HandBrake GitHub page](https://github.com/HandBrake/HandBrake/release
 release, and download HandBrakeCLI for your platform from the Assets section. You can put it
 anywhere, but for greatest convenience I recommend putting it in `/usr/local/bin`.
 
+## Getting [ffmpeg](https://ffmpeg.org)
+
+vshrink also needs `ffmpeg` for the remux step. On macOS, run `brew install ffmpeg` (Homebrew) or `sudo port install ffmpeg` (MacPorts). On Linux, use
+your distribution's package manager. Otherwise, download it from
+[ffmpeg.org](https://ffmpeg.org/download.html). If it isn't on your `PATH`, use `-ffmpeg` to point
+vshrink at it.
+
 ## Setting Up Your Preset in HandBrake
 
 By default, vshrink will look for a preset named "vshrink" from the HandBrake UI to do the encoding.
@@ -66,11 +79,12 @@ vshrink [options] input-file [input-file...]
 | `-s`, `-suffix` | `.vshrink` | Suffix inserted before the file extension to form the output file name |
 | `-p`, `-preset` | `vshrink` | Name of the HandBrake preset to use |
 | `-handbrake` | `HandBrakeCLI` | Path to the HandBrakeCLI executable |
+| `-ffmpeg` | `ffmpeg` | Path to the ffmpeg executable used for the remux step |
 | `-in-place` | false | Replace the original file with the output when the output is smaller |
 | `-ignore-size` | false | With `-in-place`, replace the original even if the output is larger |
 | `-keep` | false | Keep the output file when something goes wrong instead of deleting it |
 | `-mark` | false | Mark files as processed without encoding them, so later runs skip them |
 | `-continue` | false | Continue processing remaining files after an error |
-| `-v` | false | Verbose output (show HandBrakeCLI stderr) |
+| `-v` | false | Verbose output (show HandBrakeCLI and ffmpeg stderr) |
 | `-no-progress` | false | Disable progress output (suppress HandBrakeCLI stdout) |
 | `-print-preset` | false | Print the suggested HandBrake preset JSON to stdout and exit |
