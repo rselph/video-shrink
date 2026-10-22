@@ -151,11 +151,12 @@ func BuildArgs(c Config) []string {
 	}
 }
 
-// BuildRemuxArgs returns the ffmpeg argument list that remuxes the HandBrakeCLI
-// output into the final output file with fully interleaved tracks.
-func BuildRemuxArgs(c Config) []string {
+// BuildRemuxArgs returns the ffmpeg argument list that remuxes input into the
+// final output file with fully interleaved tracks.  input is TempPath(c) after
+// an encode pass, or c.Input when only the remux pass runs.
+func BuildRemuxArgs(c Config, input string) []string {
 	return []string{
-		"-i", TempPath(c),
+		"-i", input,
 		"-map", "0",
 		"-c", "copy",
 		"-max_interleave_delta", "0",
@@ -228,37 +229,132 @@ func runDir(c Config) error {
 	return err
 }
 
-// runFile invokes HandBrakeCLI for a single input file described by c, writing
-// to TempPath(c), then remuxes that file with ffmpeg into OutputPath(c).
+// runFile processes a single input file described by c.  Without -in-place it
+// invokes HandBrakeCLI, writing to TempPath(c), then remuxes that file with
+// ffmpeg into OutputPath(c).  With -in-place see runInPlace.
 func runFile(c Config) error {
-	outInfo, _ := os.Stat(OutputPath(c))
-
 	if c.MarkOnly {
 		return markOnly(c)
+	}
+	if c.InPlace {
+		return runInPlace(c)
 	}
 
 	if IsMarked(c) {
 		fmt.Printf("skipping %s: already processed\n", c.Input)
 		return nil
 	}
-
-	if outInfo != nil {
-		if c.InPlace {
-			return swapInPlace(c, OutputPath(c))
-		}
+	if _, err := os.Stat(OutputPath(c)); err == nil {
 		fmt.Printf("skipping %s: output file already exists\n", c.Input)
 		return nil
 	}
 
 	// Check for ffmpeg up front so a missing executable doesn't waste a long encode.
+	ffmpeg, err := lookupFFmpeg(c)
+	if err != nil {
+		return err
+	}
+	fmt.Println()
+	if err := encode(c); err != nil {
+		return err
+	}
+	return remux(c, ffmpeg, TempPath(c))
+}
+
+// runInPlace processes c.Input in place, deciding the encode and remux passes
+// separately from the file's markers:
+//
+//   - not encoded: encode, then remux.  Re-encoding invalidates any earlier remux.
+//   - encoded, not remuxed: remux only.
+//   - encoded and remuxed: skip.
+//
+// Only the encode pass compares sizes: when the re-encoded file is not smaller
+// (and -ignore-size is not set) it is discarded and the original is remuxed
+// instead.  The remux result always replaces the original.
+func runInPlace(c Config) error {
+	needEncode := !IsMarked(c)
+	if !needEncode && IsRemuxed(c) {
+		fmt.Printf("skipping %s: already processed\n", c.Input)
+		return nil
+	}
+
+	// encodedContent is the encoded marker text for an encode pass done by this
+	// run.  Empty means the existing encoded marker is carried over.
+	encodedContent := ""
+
+	// A leftover output from an interrupted run has already been remuxed.
+	if outInfo, err := os.Stat(OutputPath(c)); err == nil {
+		if !needEncode {
+			return swapInPlace(c, OutputPath(c), "")
+		}
+		origInfo, err := os.Stat(c.Input)
+		if err != nil {
+			return fmt.Errorf("in-place: cannot stat original: %w", err)
+		}
+		encodedContent = formatMarkerContent(origInfo, outInfo)
+		if keepEncoded(c, origInfo, outInfo) {
+			return swapInPlace(c, OutputPath(c), encodedContent)
+		}
+		fmt.Printf("in-place: re-encoded file is not smaller; discarding %s\n", OutputPath(c))
+		os.Remove(OutputPath(c))
+		needEncode = false
+	}
+
+	// Check for ffmpeg up front so a missing executable doesn't waste a long encode.
+	ffmpeg, err := lookupFFmpeg(c)
+	if err != nil {
+		return err
+	}
+	fmt.Println()
+
+	src := c.Input
+	if needEncode {
+		if err := encode(c); err != nil {
+			return err
+		}
+		origInfo, err := os.Stat(c.Input)
+		if err != nil {
+			return fmt.Errorf("in-place: cannot stat original: %w", err)
+		}
+		tmpInfo, err := os.Stat(TempPath(c))
+		if err != nil {
+			return fmt.Errorf("in-place: cannot stat re-encoded file: %w", err)
+		}
+		encodedContent = formatMarkerContent(origInfo, tmpInfo)
+		if keepEncoded(c, origInfo, tmpInfo) {
+			src = TempPath(c)
+		} else {
+			fmt.Printf("in-place: re-encoded file is not smaller; keeping original\n")
+			os.Remove(TempPath(c))
+		}
+	}
+
+	if err := remux(c, ffmpeg, src); err != nil {
+		return err
+	}
+	return swapInPlace(c, OutputPath(c), encodedContent)
+}
+
+// keepEncoded reports whether a re-encoded file should replace the original:
+// it must be smaller, unless -ignore-size is set.
+func keepEncoded(c Config, origInfo, newInfo os.FileInfo) bool {
+	return c.IgnoreSize || newInfo.Size() < origInfo.Size()
+}
+
+// lookupFFmpeg returns the ffmpeg executable to use, or an error if it cannot be found.
+func lookupFFmpeg(c Config) (string, error) {
 	ffmpeg := c.FFmpegPath
 	if ffmpeg == "" {
 		ffmpeg = DefaultFFmpeg
 	}
 	if _, err := exec.LookPath(ffmpeg); err != nil {
-		return fmt.Errorf("ffmpeg not found: %w", err)
+		return "", fmt.Errorf("ffmpeg not found: %w", err)
 	}
+	return ffmpeg, nil
+}
 
+// encode invokes HandBrakeCLI to re-encode c.Input into TempPath(c).
+func encode(c Config) error {
 	handbrake := c.HandbrakePath
 	if handbrake == "" {
 		handbrake = DefaultHandbrake
@@ -270,7 +366,6 @@ func runFile(c Config) error {
 	if c.Verbose {
 		cmd.Stderr = os.Stderr
 	}
-	fmt.Println()
 	fmt.Println(strings.Join(cmd.Args, " "))
 
 	killed, err := runCmd(cmd)
@@ -285,15 +380,19 @@ func runFile(c Config) error {
 	if killed {
 		os.Exit(1)
 	}
+	return nil
+}
 
-	// Remux so the audio and video tracks are fully interleaved.
-	cmd = exec.Command(ffmpeg, BuildRemuxArgs(c)...)
+// remux invokes ffmpeg to remux src into OutputPath(c) so the audio and video
+// tracks are fully interleaved, then removes TempPath(c).
+func remux(c Config, ffmpeg, src string) error {
+	cmd := exec.Command(ffmpeg, BuildRemuxArgs(c, src)...)
 	if c.Verbose {
 		cmd.Stderr = os.Stderr
 	}
 	fmt.Println(strings.Join(cmd.Args, " "))
 
-	killed, err = runCmd(cmd)
+	killed, err := runCmd(cmd)
 	if err != nil {
 		if !c.KeepOnError {
 			os.Remove(OutputPath(c))
@@ -307,10 +406,6 @@ func runFile(c Config) error {
 		os.Exit(1)
 	}
 	os.Remove(TempPath(c))
-
-	if c.InPlace {
-		return swapInPlace(c, OutputPath(c))
-	}
 	return nil
 }
 
@@ -361,7 +456,9 @@ func runCmd(cmd *exec.Cmd) (killed bool, err error) {
 	return killed, err
 }
 
-// swapInPlace replaces c.Input with outputPath if outputPath is smaller.
+// swapInPlace replaces c.Input with outputPath and records both the encoded
+// and remux markers on the result.  encodedContent is the encoded marker text;
+// when empty, the text of c.Input's existing encoded marker is carried over.
 // The swap is performed via three steps so the original is never destroyed
 // before a valid replacement exists:
 //
@@ -376,27 +473,31 @@ func runCmd(cmd *exec.Cmd) (killed bool, err error) {
 //   - backup present, output present: step 1 done, step 2 not yet.
 //     Rename backup → original.
 //   - backup present, output absent: step 2 done, step 3 not yet.
-//     Rename original → output, then backup → original.
-func swapInPlace(c Config, outputPath string) error {
-	origInfo, err := os.Stat(c.Input)
-	if err != nil {
+//     Rename original → output, then backup → original, and remove any marker
+//     files this swap created.
+func swapInPlace(c Config, outputPath, encodedContent string) error {
+	if _, err := os.Stat(c.Input); err != nil {
 		return fmt.Errorf("in-place: cannot stat original: %w", err)
 	}
 	newInfo, err := os.Stat(outputPath)
 	if err != nil {
 		return fmt.Errorf("in-place: cannot stat output: %w", err)
 	}
-	if !c.IgnoreSize && newInfo.Size() >= origInfo.Size() {
-		fmt.Printf("in-place: output is not smaller; discarding %s\n", outputPath)
-		MarkComplete(c, origInfo, newInfo)
-		os.Remove(outputPath)
-		return nil
+	if encodedContent == "" {
+		encodedContent = markerContent(c, encodedMarker)
 	}
 
 	backupPath := c.Input + ".vshrink.orig"
 	if _, err := os.Stat(backupPath); err == nil {
 		return fmt.Errorf("in-place: backup path already exists: %s", backupPath)
 	}
+
+	// Note which marker files already belong to the original, so recovery only
+	// removes the ones this swap creates.
+	_, err = os.Stat(MarkerPath(c))
+	hadMarkerFile := err == nil
+	_, err = os.Stat(RemuxMarkerPath(c))
+	hadRemuxMarkerFile := err == nil
 
 	// Register signal handler before any renames so no interrupt can slip through.
 	sigCh := make(chan os.Signal, 1)
@@ -420,13 +521,17 @@ func swapInPlace(c Config, outputPath string) error {
 			// Encoded file has been promoted to c.Input; original is at backupPath.
 			os.Rename(c.Input, outputPath)
 			os.Rename(backupPath, c.Input)
-		}
 
-		// Remove markers/xattrs if they exist, since in-place processing did not complete.
-		os.Remove(MarkerPath(c))
-		RemoveXattr(c.Input)
-		os.Remove(RemuxMarkerPath(c))
-		RemoveRemuxXattr(c.Input)
+			// Markers are only written after step 2.  Xattrs moved back to outputPath with the
+			// promoted file, but marker files are named after the original, so remove the ones
+			// this swap created.
+			if !hadMarkerFile {
+				os.Remove(MarkerPath(c))
+			}
+			if !hadRemuxMarkerFile {
+				os.Remove(RemuxMarkerPath(c))
+			}
+		}
 		os.Exit(1)
 	}()
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
@@ -449,8 +554,9 @@ func swapInPlace(c Config, outputPath string) error {
 		return fmt.Errorf("in-place: cannot rename output to original: %w", err)
 	}
 
-	// Record that this file has been processed.
-	if err := MarkComplete(c, origInfo, newInfo); err != nil {
+	// Record that this file has been processed.  The promoted file is a new file, so the marker
+	// is written afresh, timestamped with its mtime.
+	if err := writeMarker(c, encodedMarker, newInfo.ModTime(), encodedContent); err != nil {
 		fmt.Printf("in-place: warning: could not create marker: %v\n", err)
 		// Restore original, so we don't double encode on the next run.  This is a best effort
 		// attempt, so if it fails we just print a warning and leave the files as they are.
@@ -461,8 +567,8 @@ func swapInPlace(c Config, outputPath string) error {
 		return err
 	}
 
-	// Record that this file has been remuxed.  A missing remux marker only means a later remux
-	// pass repeats a lossless step, so a failure here is just a warning.
+	// Record that this file has been remuxed.  A missing remux marker only means a later run
+	// repeats a lossless step, so a failure here is just a warning.
 	if err := MarkRemuxed(c, newInfo); err != nil {
 		fmt.Printf("in-place: warning: could not create remux marker: %v\n", err)
 	}

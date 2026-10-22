@@ -27,14 +27,22 @@ that it has already been handled. On filesystems that don't support extended att
 Windows/NTFS), vshrink falls back to an empty marker file named `.vshrink.<filename>.done` in the
 same directory. Old-format marker files (`.vshrink.done.<filename>`) are also recognised and are
 automatically upgraded to extended attributes when possible. Sometimes, the re-encoded file will
-actually be larger than the original. When this happens, vshrink leaves the original in place unless
-`-ignore-size` is set.
+actually be larger than the original. When this happens, vshrink discards it and keeps the original
+unless `-ignore-size` is set. The original is still remuxed.
 
-- Separately, when a remuxed file replaces the original, vshrink records a second extended attribute
-(`user.com.rselph.vshrink-remux.done`) to remember that the file has been remuxed. Its fallback
-marker file is `.vshrink-remux.<filename>.done`. Files processed by older versions of vshrink, and files
-whose original was kept because the new file wasn't smaller, carry only the first marker, meaning
-they haven't been remuxed.
+- Separately, vshrink records a second extended attribute (`user.com.rselph.vshrink-remux.done`) to
+remember that the file has been remuxed. Its fallback marker file is
+`.vshrink-remux.<filename>.done`. With `-in-place`, vshrink decides each pass from the two markers:
+
+  | Re-encoded | Remuxed | What `-in-place` does |
+  |------------|---------|-----------------------|
+  | no         | either  | Re-encode, then remux (re-encoding undoes any earlier remux) |
+  | yes        | no      | Remux only |
+  | yes        | yes     | Nothing |
+
+  Only the re-encode pass compares sizes. The remuxed file always replaces the original, since
+  remuxing doesn't change the video. Files processed by older versions of vshrink carry only the
+  first marker, so an `-in-place` run remuxes them without re-encoding them.
 
 - When `-mark` is set, vshrink doesn't encode anything. It just records both the "already processed"
 and "remuxed" markers on each file, so future runs (including `-in-place` runs) leave those files
@@ -46,7 +54,8 @@ are.
 
 If an input argument is a directory, vshrink recurses into it and converts every recognized video
 file it finds. This works for both regular and in-place modes. Files that have already been
-processed are skipped. Vshrink will never re-encode a file twice.
+processed are skipped, apart from the remux pass described above. Vshrink will never re-encode a
+file twice.
 
 Recognized video extensions: `.mp4`, `.mkv`, `.avi`, `.mov`, `.m4v`, `.wmv`, `.flv`, `.webm`,
 `.mpeg`, `.mpg`, `.ts`, `.m2ts`, `.vob`.
@@ -88,8 +97,8 @@ vshrink [options] input-file [input-file...]
 | `-p`, `-preset` | `vshrink` | Name of the HandBrake preset to use |
 | `-handbrake` | `HandBrakeCLI` | Path to the HandBrakeCLI executable |
 | `-ffmpeg` | `ffmpeg` | Path to the ffmpeg executable used for the remux step |
-| `-in-place` | false | Replace the original file with the output when the output is smaller |
-| `-ignore-size` | false | With `-in-place`, replace the original even if the output is larger |
+| `-in-place` | false | Replace the original file with the re-encoded (if smaller) and remuxed file |
+| `-ignore-size` | false | With `-in-place`, keep the re-encoded file even if it is larger than the original |
 | `-keep` | false | Keep the output file when something goes wrong instead of deleting it |
 | `-mark` | false | Mark files as processed without encoding them, so later runs skip them |
 | `-continue` | false | Continue processing remaining files after an error |

@@ -208,6 +208,28 @@ func isMarked(c Config, k markerKind) bool {
 	return true
 }
 
+// markerContent returns the text recorded in c.Input's marker of kind k, without
+// its timestamp, checking the sources in the same order as findMarker.  It
+// returns "" if there is no marker.
+func markerContent(c Config, k markerKind) string {
+	if value, err := getXattr(c.Input, k.key); err == nil {
+		if _, err := ParseXattrTimestamp(value); err == nil {
+			_, content, _ := strings.Cut(value, " ")
+			return content
+		}
+	}
+	paths := []string{k.path(c)}
+	if k.legacyPath != nil {
+		paths = append(paths, k.legacyPath(c))
+	}
+	for _, p := range paths {
+		if data, err := os.ReadFile(p); err == nil {
+			return strings.TrimSpace(string(data))
+		}
+	}
+	return ""
+}
+
 // MarkerTime returns the effective timestamp of the marker for c.Input.
 // For xattr markers this is the parsed timestamp field; for marker files
 // it is the file's mtime.

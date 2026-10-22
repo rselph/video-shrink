@@ -651,29 +651,33 @@ func TestRunInPlaceDiscardsWhenOutputLarger(t *testing.T) {
 	if err := os.WriteFile(output, make([]byte, 1000), 0644); err != nil {
 		t.Fatal(err)
 	}
-	cfg.HandbrakePath = "true"
+	cfg.HandbrakePath = "false"
+	// ffmpeg stand-in remuxes the original after the larger output is discarded.
+	cfg.FFmpegPath = writeScript(t, dir, "ff.sh", "cp \"$2\" \"$9\"\n")
 	if err := vshrink.Run(cfg); err != nil {
 		t.Fatalf("Run() returned unexpected error: %v", err)
 	}
-	// Original should be untouched.
+	// The input should hold the remuxed original.
 	data, err := os.ReadFile(input)
 	if err != nil {
 		t.Fatalf("cannot read input: %v", err)
 	}
 	if !reflect.DeepEqual(data, origContent) {
-		t.Errorf("original content changed unexpectedly")
+		t.Errorf("input content = %q, want remuxed original %q", data, origContent)
 	}
 	// Output should have been removed.
 	if _, err := os.Stat(output); !os.IsNotExist(err) {
 		t.Errorf("larger output should be removed, stat err = %v", err)
 	}
-	// File should still be marked (to prevent reprocessing).
+	// File should be marked both encoded and remuxed.
 	if !vshrink.IsMarked(cfg) {
 		t.Error("file should be marked even when output was discarded")
 	}
-	// The original was not replaced, so it was never remuxed.
-	if vshrink.IsRemuxed(cfg) {
-		t.Error("file should not be marked remuxed when output was discarded")
+	if !vshrink.IsRemuxed(cfg) {
+		t.Error("file should be marked remuxed after the original was remuxed")
+	}
+	if got := encodedMarkerText(t, input); !strings.Contains(got, "(not replaced)") {
+		t.Errorf("encoded marker text = %q, want it to note the original was kept", got)
 	}
 }
 
@@ -919,10 +923,11 @@ func TestRunInPlaceEqualSizeDiscards(t *testing.T) {
 	cfg := vshrink.Config{Input: input, InPlace: true}
 	output := vshrink.OutputPath(cfg)
 	// Same size should also be discarded (condition is >=).
-	if err := os.WriteFile(output, content, 0644); err != nil {
+	if err := os.WriteFile(output, []byte(strings.Repeat("x", len(content))), 0644); err != nil {
 		t.Fatal(err)
 	}
-	cfg.HandbrakePath = "true"
+	cfg.HandbrakePath = "false"
+	cfg.FFmpegPath = writeScript(t, dir, "ff.sh", "cp \"$2\" \"$9\"\n")
 	if err := vshrink.Run(cfg); err != nil {
 		t.Fatalf("Run() returned unexpected error: %v", err)
 	}
@@ -941,8 +946,8 @@ func TestRunInPlaceEqualSizeDiscards(t *testing.T) {
 	if !vshrink.IsMarked(cfg) {
 		t.Error("file should be marked even when output was discarded")
 	}
-	if vshrink.IsRemuxed(cfg) {
-		t.Error("file should not be marked remuxed when output was discarded")
+	if !vshrink.IsRemuxed(cfg) {
+		t.Error("file should be marked remuxed after the original was remuxed")
 	}
 }
 
@@ -1008,7 +1013,7 @@ func TestBuildRemuxArgs(t *testing.T) {
 		"-max_interleave_delta", "0",
 		"/movies/film.vshrink.mp4",
 	}
-	if got := vshrink.BuildRemuxArgs(c); !reflect.DeepEqual(got, want) {
+	if got := vshrink.BuildRemuxArgs(c, vshrink.TempPath(c)); !reflect.DeepEqual(got, want) {
 		t.Errorf("BuildRemuxArgs() = %v, want %v", got, want)
 	}
 }
@@ -1094,5 +1099,196 @@ func TestRunMissingFFmpegSkipsEncode(t *testing.T) {
 	}
 	if _, err := os.Stat(sentinel); !os.IsNotExist(err) {
 		t.Error("HandBrakeCLI should not run when ffmpeg is missing")
+	}
+}
+
+// encodedMarkerText returns the encoded marker xattr on path without its timestamp.
+func encodedMarkerText(t *testing.T, path string) string {
+	t.Helper()
+	value, err := vshrink.GetXattr(path)
+	if err != nil {
+		t.Fatalf("GetXattr() error: %v", err)
+	}
+	_, text, _ := strings.Cut(value, " ")
+	return text
+}
+
+// inPlaceFixture creates an input file and HandBrakeCLI/ffmpeg stand-ins for an
+// in-place run.  The HandBrakeCLI stand-in writes encoded to its output ($7) and
+// touches a sentinel; the ffmpeg stand-in records its input ($2) and runs
+// ffmpegBody to produce its output ($9).
+func inPlaceFixture(t *testing.T, original, encoded, ffmpegBody string) (cfg vshrink.Config, hbSentinel, ffInput string) {
+	t.Helper()
+	dir := t.TempDir()
+	input := filepath.Join(dir, "video.mp4")
+	if err := os.WriteFile(input, []byte(original), 0644); err != nil {
+		t.Fatal(err)
+	}
+	hbSentinel = filepath.Join(dir, "hb-ran")
+	ffInput = filepath.Join(dir, "ff-input")
+	cfg = vshrink.Config{
+		Input:         input,
+		InPlace:       true,
+		HandbrakePath: writeScript(t, dir, "hb.sh", "touch \""+hbSentinel+"\"\nprintf '%s' '"+encoded+"' > \"$7\"\n"),
+		FFmpegPath:    writeScript(t, dir, "ff.sh", "echo \"$2\" > \""+ffInput+"\"\n"+ffmpegBody),
+	}
+	return cfg, hbSentinel, ffInput
+}
+
+func readTrimmed(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("cannot read %s: %v", path, err)
+	}
+	return strings.TrimSpace(string(data))
+}
+
+func TestRunInPlaceEncodesAndRemuxes(t *testing.T) {
+	cfg, hbSentinel, ffInput := inPlaceFixture(t, "a much longer original file", "small", "cp \"$2\" \"$9\"\n")
+	if err := vshrink.Run(cfg); err != nil {
+		t.Fatalf("Run() returned unexpected error: %v", err)
+	}
+	if _, err := os.Stat(hbSentinel); err != nil {
+		t.Error("HandBrakeCLI should run for an unmarked file")
+	}
+	if got := readTrimmed(t, ffInput); got != vshrink.TempPath(cfg) {
+		t.Errorf("ffmpeg input = %q, want re-encoded file %q", got, vshrink.TempPath(cfg))
+	}
+	if got := readTrimmed(t, cfg.Input); got != "small" {
+		t.Errorf("input content = %q, want re-encoded content", got)
+	}
+	if !vshrink.IsMarked(cfg) || !vshrink.IsRemuxed(cfg) {
+		t.Error("file should be marked encoded and remuxed")
+	}
+	if _, err := os.Stat(vshrink.TempPath(cfg)); !os.IsNotExist(err) {
+		t.Errorf("temp file should be removed, stat err = %v", err)
+	}
+}
+
+func TestRunInPlaceRemuxesOriginalWhenEncodeNotSmaller(t *testing.T) {
+	cfg, hbSentinel, ffInput := inPlaceFixture(t, "orig", "a much larger re-encoded file", "cp \"$2\" \"$9\"\n")
+	if err := vshrink.Run(cfg); err != nil {
+		t.Fatalf("Run() returned unexpected error: %v", err)
+	}
+	if _, err := os.Stat(hbSentinel); err != nil {
+		t.Error("HandBrakeCLI should run for an unmarked file")
+	}
+	if got := readTrimmed(t, ffInput); got != cfg.Input {
+		t.Errorf("ffmpeg input = %q, want original %q", got, cfg.Input)
+	}
+	if got := readTrimmed(t, cfg.Input); got != "orig" {
+		t.Errorf("input content = %q, want remuxed original", got)
+	}
+	if _, err := os.Stat(vshrink.TempPath(cfg)); !os.IsNotExist(err) {
+		t.Errorf("temp file should be removed, stat err = %v", err)
+	}
+	if !vshrink.IsMarked(cfg) || !vshrink.IsRemuxed(cfg) {
+		t.Error("file should be marked encoded and remuxed")
+	}
+	if got := encodedMarkerText(t, cfg.Input); !strings.Contains(got, "(not replaced)") {
+		t.Errorf("encoded marker text = %q, want it to note the original was kept", got)
+	}
+}
+
+func TestRunInPlaceRemuxOnlyWhenEncoded(t *testing.T) {
+	// The ffmpeg stand-in writes a larger file; the remux pass must not compare sizes.
+	cfg, hbSentinel, ffInput := inPlaceFixture(t, "orig", "unused", "cat \"$2\" \"$2\" > \"$9\"\n")
+	text := "original size: 100, new size: 50 (50.000000%)"
+	if err := vshrink.SetXattr(cfg.Input, vshrink.FormatXattrValue(time.Now(), text)); err != nil {
+		t.Fatal(err)
+	}
+	if err := vshrink.Run(cfg); err != nil {
+		t.Fatalf("Run() returned unexpected error: %v", err)
+	}
+	if _, err := os.Stat(hbSentinel); !os.IsNotExist(err) {
+		t.Error("HandBrakeCLI should not run for an already encoded file")
+	}
+	if got := readTrimmed(t, ffInput); got != cfg.Input {
+		t.Errorf("ffmpeg input = %q, want original %q", got, cfg.Input)
+	}
+	if got := readTrimmed(t, cfg.Input); got != "origorig" {
+		t.Errorf("input content = %q, want larger remuxed file", got)
+	}
+	if !vshrink.IsMarked(cfg) || !vshrink.IsRemuxed(cfg) {
+		t.Error("file should be marked encoded and remuxed")
+	}
+	if got := encodedMarkerText(t, cfg.Input); got != text {
+		t.Errorf("encoded marker text = %q, want carried over %q", got, text)
+	}
+}
+
+func TestRunInPlaceRemuxOnlySwapsLeftoverOutput(t *testing.T) {
+	cfg, _, _ := inPlaceFixture(t, "orig", "unused", "")
+	cfg.HandbrakePath = "false"
+	cfg.FFmpegPath = "false"
+	if err := vshrink.SetXattr(cfg.Input, vshrink.FormatXattrValue(time.Now(), "test")); err != nil {
+		t.Fatal(err)
+	}
+	// A larger leftover remux output is swapped in without a size check.
+	if err := os.WriteFile(vshrink.OutputPath(cfg), []byte("origorig"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := vshrink.Run(cfg); err != nil {
+		t.Fatalf("Run() returned unexpected error: %v", err)
+	}
+	if got := readTrimmed(t, cfg.Input); got != "origorig" {
+		t.Errorf("input content = %q, want leftover output", got)
+	}
+	if !vshrink.IsMarked(cfg) || !vshrink.IsRemuxed(cfg) {
+		t.Error("file should be marked encoded and remuxed")
+	}
+}
+
+func TestRunInPlaceEncodesWhenOnlyRemuxed(t *testing.T) {
+	cfg, hbSentinel, ffInput := inPlaceFixture(t, "a much longer original file", "small", "cp \"$2\" \"$9\"\n")
+	if err := vshrink.SetRemuxXattr(cfg.Input, vshrink.FormatXattrValue(time.Now(), "remuxed")); err != nil {
+		t.Fatal(err)
+	}
+	if err := vshrink.Run(cfg); err != nil {
+		t.Fatalf("Run() returned unexpected error: %v", err)
+	}
+	if _, err := os.Stat(hbSentinel); err != nil {
+		t.Error("HandBrakeCLI should run for a file that is remuxed but not encoded")
+	}
+	if got := readTrimmed(t, ffInput); got != vshrink.TempPath(cfg) {
+		t.Errorf("ffmpeg input = %q, want re-encoded file %q", got, vshrink.TempPath(cfg))
+	}
+	if got := readTrimmed(t, cfg.Input); got != "small" {
+		t.Errorf("input content = %q, want re-encoded content", got)
+	}
+	if !vshrink.IsMarked(cfg) || !vshrink.IsRemuxed(cfg) {
+		t.Error("file should be marked encoded and remuxed")
+	}
+}
+
+func TestRunInPlaceSkipsEncodedAndRemuxed(t *testing.T) {
+	cfg, _, _ := inPlaceFixture(t, "orig", "unused", "")
+	cfg.HandbrakePath = "false"
+	cfg.FFmpegPath = "false"
+	if err := vshrink.MarkSkipped(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := vshrink.Run(cfg); err != nil {
+		t.Fatalf("Run() should skip a fully marked file, got error: %v", err)
+	}
+	if got := readTrimmed(t, cfg.Input); got != "orig" {
+		t.Errorf("input content = %q, want unchanged", got)
+	}
+}
+
+func TestRunSkipsEncodedFileWithoutInPlace(t *testing.T) {
+	cfg, _, _ := inPlaceFixture(t, "orig", "unused", "")
+	cfg.InPlace = false
+	cfg.HandbrakePath = "false"
+	cfg.FFmpegPath = "false"
+	if err := vshrink.SetXattr(cfg.Input, vshrink.FormatXattrValue(time.Now(), "test")); err != nil {
+		t.Fatal(err)
+	}
+	if err := vshrink.Run(cfg); err != nil {
+		t.Fatalf("Run() should skip an encoded file without -in-place, got error: %v", err)
+	}
+	if _, err := os.Stat(vshrink.OutputPath(cfg)); !os.IsNotExist(err) {
+		t.Errorf("no output should be written, stat err = %v", err)
 	}
 }
