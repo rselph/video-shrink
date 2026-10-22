@@ -283,6 +283,33 @@ func TestMarkerPath(t *testing.T) {
 	}
 }
 
+func TestRemuxMarkerPath(t *testing.T) {
+	tests := []struct {
+		name   string
+		config vshrink.Config
+		want   string
+	}{
+		{
+			name:   "basic file",
+			config: vshrink.Config{Input: "/path/to/video.mp4"},
+			want:   "/path/to/" + vshrink.RemuxMarkerPrefix + "video.mp4" + vshrink.MarkerSuffix,
+		},
+		{
+			name:   "file in current directory",
+			config: vshrink.Config{Input: "movie.mkv"},
+			want:   vshrink.RemuxMarkerPrefix + "movie.mkv" + vshrink.MarkerSuffix,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := vshrink.RemuxMarkerPath(tt.config)
+			if got != tt.want {
+				t.Errorf("RemuxMarkerPath() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestLegacyMarkerPath(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -330,6 +357,10 @@ func TestIsMarkerFile(t *testing.T) {
 		{".vshrink.done.file", true},
 		// Old format with video extension (key backward compat case)
 		{".vshrink.done.video.ts", true},
+		// Remux marker: .vshrink-remux.<basename>.done
+		{".vshrink-remux.video.mp4.done", true},
+		{"/path/to/.vshrink-remux.clip.mkv.done", true},
+		{".vshrink-remux.video.mp4", false}, // prefix but no .done suffix
 		// Not a marker
 		{"video.mp4", false},
 		{".vshrink.video.mp4", false}, // prefix but no .done suffix
@@ -602,6 +633,9 @@ func TestRunInPlaceSwapsWhenOutputSmaller(t *testing.T) {
 	if !vshrink.IsMarked(cfg) {
 		t.Error("file should be marked after swap")
 	}
+	if !vshrink.IsRemuxed(cfg) {
+		t.Error("file should be marked remuxed after swap")
+	}
 }
 
 func TestRunInPlaceDiscardsWhenOutputLarger(t *testing.T) {
@@ -637,6 +671,10 @@ func TestRunInPlaceDiscardsWhenOutputLarger(t *testing.T) {
 	if !vshrink.IsMarked(cfg) {
 		t.Error("file should be marked even when output was discarded")
 	}
+	// The original was not replaced, so it was never remuxed.
+	if vshrink.IsRemuxed(cfg) {
+		t.Error("file should not be marked remuxed when output was discarded")
+	}
 }
 
 func TestRunInPlaceIgnoreSize(t *testing.T) {
@@ -663,6 +701,9 @@ func TestRunInPlaceIgnoreSize(t *testing.T) {
 	}
 	if !reflect.DeepEqual(data, largeContent) {
 		t.Errorf("input should contain larger encoded content when IgnoreSize is set")
+	}
+	if !vshrink.IsRemuxed(cfg) {
+		t.Error("file should be marked remuxed after swap")
 	}
 }
 
@@ -736,6 +777,9 @@ func TestRunMarkOnly(t *testing.T) {
 	if !vshrink.IsMarked(cfg) {
 		t.Error("file should be marked after Run() with MarkOnly")
 	}
+	if !vshrink.IsRemuxed(cfg) {
+		t.Error("file should be marked remuxed after Run() with MarkOnly")
+	}
 	if _, err := os.Stat(vshrink.OutputPath(cfg)); !os.IsNotExist(err) {
 		t.Errorf("output file should not exist, stat err = %v", err)
 	}
@@ -748,6 +792,33 @@ func TestRunMarkOnly(t *testing.T) {
 	cfg.InPlace = true
 	if err := vshrink.Run(cfg); err != nil {
 		t.Errorf("Run() should skip marked file, got error: %v", err)
+	}
+}
+
+func TestRunMarkOnlyAddsRemuxMarkerToLegacyFile(t *testing.T) {
+	dir := t.TempDir()
+	input := filepath.Join(dir, "video.mp4")
+	if err := os.WriteFile(input, []byte("original"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// A file processed by an older version carries only the encoded marker.
+	encodedValue := vshrink.FormatXattrValue(time.Now(), "original size: 100, new size: 50")
+	if err := vshrink.SetXattr(input, encodedValue); err != nil {
+		t.Fatal(err)
+	}
+	cfg := vshrink.Config{Input: input, HandbrakePath: "false", MarkOnly: true}
+	if vshrink.IsRemuxed(cfg) {
+		t.Fatal("legacy file should not start out remuxed")
+	}
+	if err := vshrink.Run(cfg); err != nil {
+		t.Fatalf("Run() with MarkOnly error: %v", err)
+	}
+	if !vshrink.IsRemuxed(cfg) {
+		t.Error("legacy file should be marked remuxed after Run() with MarkOnly")
+	}
+	// The existing encoded marker should be left as it was.
+	if got, err := vshrink.GetXattr(input); err != nil || got != encodedValue {
+		t.Errorf("encoded xattr = %q (err %v), want %q", got, err, encodedValue)
 	}
 }
 
@@ -767,6 +838,9 @@ func TestRunMarkOnlyDir(t *testing.T) {
 		t.Fatalf("Run() with MarkOnly on dir error: %v", err)
 	}
 	for _, v := range videos {
+		if !vshrink.IsRemuxed(vshrink.Config{Input: v}) {
+			t.Errorf("%s should be marked remuxed", v)
+		}
 		if !vshrink.IsMarked(vshrink.Config{Input: v}) {
 			t.Errorf("%s should be marked", v)
 		}
@@ -863,6 +937,12 @@ func TestRunInPlaceEqualSizeDiscards(t *testing.T) {
 	// Output should have been removed.
 	if _, err := os.Stat(output); !os.IsNotExist(err) {
 		t.Errorf("equal-size output should be removed, stat err = %v", err)
+	}
+	if !vshrink.IsMarked(cfg) {
+		t.Error("file should be marked even when output was discarded")
+	}
+	if vshrink.IsRemuxed(cfg) {
+		t.Error("file should not be marked remuxed when output was discarded")
 	}
 }
 

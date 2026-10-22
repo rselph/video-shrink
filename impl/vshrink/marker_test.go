@@ -255,6 +255,9 @@ func TestMarkSkippedWritesXattr(t *testing.T) {
 	if !vshrink.IsMarked(cfg) {
 		t.Error("IsMarked() should return true after MarkSkipped")
 	}
+	if !vshrink.IsRemuxed(cfg) {
+		t.Error("IsRemuxed() should return true after MarkSkipped")
+	}
 }
 
 func TestIsMarkedUpgradesOnRead(t *testing.T) {
@@ -280,4 +283,121 @@ func TestIsMarkedUpgradesOnRead(t *testing.T) {
 	if _, err := os.Stat(vshrink.MarkerPath(cfg)); !os.IsNotExist(err) {
 		t.Errorf("marker file should be removed after IsMarked upgrade, stat err = %v", err)
 	}
+}
+
+func TestSetGetRemoveRemuxXattrRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "testfile")
+	if err := os.WriteFile(f, []byte("data"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	value := vshrink.FormatXattrValue(time.Now(), "remuxed")
+	if err := vshrink.SetRemuxXattr(f, value); err != nil {
+		t.Fatalf("SetRemuxXattr() error: %v", err)
+	}
+	got, err := vshrink.GetRemuxXattr(f)
+	if err != nil {
+		t.Fatalf("GetRemuxXattr() error: %v", err)
+	}
+	if got != value {
+		t.Errorf("GetRemuxXattr() = %q, want %q", got, value)
+	}
+	// The remux xattr is independent of the encoded xattr.
+	if _, err := vshrink.GetXattr(f); err == nil {
+		t.Error("GetXattr() should not see the remux xattr")
+	}
+
+	if err := vshrink.RemoveRemuxXattr(f); err != nil {
+		t.Fatalf("RemoveRemuxXattr() error: %v", err)
+	}
+	if _, err := vshrink.GetRemuxXattr(f); err == nil {
+		t.Error("GetRemuxXattr() should return error after RemoveRemuxXattr()")
+	}
+	if err := vshrink.RemoveRemuxXattr(f); err != nil {
+		t.Errorf("RemoveRemuxXattr() on missing attribute returned error: %v", err)
+	}
+}
+
+func TestMarkRemuxedWritesXattr(t *testing.T) {
+	dir := t.TempDir()
+	input := filepath.Join(dir, "video.mp4")
+	if err := os.WriteFile(input, []byte("data"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := vshrink.Config{Input: input}
+	if err := vshrink.MarkRemuxed(cfg, info); err != nil {
+		t.Fatalf("MarkRemuxed() error: %v", err)
+	}
+	if _, err := vshrink.GetRemuxXattr(input); err != nil {
+		t.Errorf("remux xattr should be set: %v", err)
+	}
+	if !vshrink.IsRemuxed(cfg) {
+		t.Error("IsRemuxed() should return true after MarkRemuxed()")
+	}
+	// Remuxing alone does not mark the file as encoded.
+	if vshrink.IsMarked(cfg) {
+		t.Error("IsMarked() should return false after only MarkRemuxed()")
+	}
+}
+
+func TestIsRemuxed(t *testing.T) {
+	setup := func(t *testing.T) (string, vshrink.Config) {
+		dir := t.TempDir()
+		input := filepath.Join(dir, "video.mp4")
+		if err := os.WriteFile(input, []byte("data"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		return input, vshrink.Config{Input: input}
+	}
+
+	t.Run("no marker", func(t *testing.T) {
+		_, cfg := setup(t)
+		if vshrink.IsRemuxed(cfg) {
+			t.Error("IsRemuxed() should return false when no marker exists")
+		}
+	})
+
+	t.Run("legacy encoded marker only", func(t *testing.T) {
+		input, cfg := setup(t)
+		if err := vshrink.SetXattr(input, vshrink.FormatXattrValue(time.Now(), "test")); err != nil {
+			t.Fatal(err)
+		}
+		if !vshrink.IsMarked(cfg) || vshrink.IsRemuxed(cfg) {
+			t.Error("a file with only the encoded marker should be marked but not remuxed")
+		}
+	})
+
+	t.Run("stale xattr", func(t *testing.T) {
+		input, cfg := setup(t)
+		if err := vshrink.SetRemuxXattr(input, vshrink.FormatXattrValue(time.Now().Add(-2*time.Hour), "remuxed")); err != nil {
+			t.Fatal(err)
+		}
+		if vshrink.IsRemuxed(cfg) {
+			t.Error("IsRemuxed() should return false when the marker is stale")
+		}
+	})
+
+	t.Run("marker file upgrades to xattr", func(t *testing.T) {
+		input, cfg := setup(t)
+		if err := os.WriteFile(vshrink.RemuxMarkerPath(cfg), []byte("remuxed"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if !vshrink.IsRemuxed(cfg) {
+			t.Fatal("IsRemuxed() should return true when the remux marker file exists")
+		}
+		if _, err := vshrink.GetRemuxXattr(input); err != nil {
+			t.Errorf("remux xattr should be set after upgrade: %v", err)
+		}
+		if _, err := os.Stat(vshrink.RemuxMarkerPath(cfg)); !os.IsNotExist(err) {
+			t.Errorf("remux marker file should be removed after upgrade, stat err = %v", err)
+		}
+		if vshrink.IsMarked(cfg) {
+			t.Error("IsMarked() should not be affected by the remux marker")
+		}
+	})
 }

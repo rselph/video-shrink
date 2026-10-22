@@ -30,9 +30,17 @@ automatically upgraded to extended attributes when possible. Sometimes, the re-e
 actually be larger than the original. When this happens, vshrink leaves the original in place unless
 `-ignore-size` is set.
 
-- When `-mark` is set, vshrink doesn't encode anything. It just records the same "already processed"
-marker on each file, so future runs (including `-in-place` runs) leave those files alone. Files that
-are already marked are left as they are.
+- Separately, when a remuxed file replaces the original, vshrink records a second extended attribute
+(`user.com.rselph.vshrink-remux.done`) to remember that the file has been remuxed. Its fallback
+marker file is `.vshrink-remux.<filename>.done`. Files processed by older versions of vshrink, and files
+whose original was kept because the new file wasn't smaller, carry only the first marker, meaning
+they haven't been remuxed.
+
+- When `-mark` is set, vshrink doesn't encode anything. It just records both the "already processed"
+and "remuxed" markers on each file, so future runs (including `-in-place` runs) leave those files
+alone. Files that have only the "already processed" marker (such as files processed by older
+versions of vshrink) get the missing "remuxed" marker. Files that already have both are left as they
+are.
 
 ### Directory Input
 

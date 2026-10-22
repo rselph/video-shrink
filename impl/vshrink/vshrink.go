@@ -16,13 +16,14 @@ import (
 var PresetData []byte
 
 const (
-	DefaultSuffix    = ".vshrink"
-	DefaultPreset    = "vshrink"
-	DefaultHandbrake = "HandBrakeCLI"
-	DefaultFFmpeg    = "ffmpeg"
-	OldMarkerPrefix  = ".vshrink.done."
-	MarkerPrefix     = ".vshrink."
-	MarkerSuffix     = ".done"
+	DefaultSuffix     = ".vshrink"
+	DefaultPreset     = "vshrink"
+	DefaultHandbrake  = "HandBrakeCLI"
+	DefaultFFmpeg     = "ffmpeg"
+	OldMarkerPrefix   = ".vshrink.done."
+	MarkerPrefix      = ".vshrink."
+	MarkerSuffix      = ".done"
+	RemuxMarkerPrefix = ".vshrink-remux."
 )
 
 // VideoExtensions is the set of file extensions recognised as video files.
@@ -110,6 +111,14 @@ func MarkerPath(c Config) string {
 	return filepath.Join(filepath.Dir(c.Input), MarkerPrefix+filepath.Base(c.Input)+MarkerSuffix)
 }
 
+// RemuxMarkerPath returns the path of the sentinel file that records a remux
+// on filesystems without xattr support.  It is an empty file placed in the same
+// directory as c.Input, named ".vshrink-remux." followed by the input file's
+// base name and ".done".
+func RemuxMarkerPath(c Config) string {
+	return filepath.Join(filepath.Dir(c.Input), RemuxMarkerPrefix+filepath.Base(c.Input)+MarkerSuffix)
+}
+
 // LegacyMarkerPath returns the path of the old-format marker file, which has the form
 // ".vshrink.done." followed by the input file's base name.  This is checked by IsMarkerFile for
 // robustness against changes in the naming scheme.
@@ -118,11 +127,13 @@ func LegacyMarkerPath(c Config) string {
 }
 
 // IsMarkerFile returns true when path has the form of a marker file created by swapInPlace. It will
-// detect both the current marker format (".vshrink.<basename>.done") and the old format
-// (".vshrink.done.<basename>") to be robust against changes in the naming scheme.
+// detect the current marker format (".vshrink.<basename>.done"), the remux marker format
+// (".vshrink-remux.<basename>.done"), and the old format (".vshrink.done.<basename>") to be robust
+// against changes in the naming scheme.
 func IsMarkerFile(path string) bool {
 	base := filepath.Base(path)
 	return strings.HasPrefix(base, MarkerPrefix) && strings.HasSuffix(base, MarkerSuffix) ||
+		strings.HasPrefix(base, RemuxMarkerPrefix) && strings.HasSuffix(base, MarkerSuffix) ||
 		strings.HasPrefix(base, OldMarkerPrefix)
 }
 
@@ -222,14 +233,13 @@ func runDir(c Config) error {
 func runFile(c Config) error {
 	outInfo, _ := os.Stat(OutputPath(c))
 
+	if c.MarkOnly {
+		return markOnly(c)
+	}
+
 	if IsMarked(c) {
 		fmt.Printf("skipping %s: already processed\n", c.Input)
 		return nil
-	}
-
-	if c.MarkOnly {
-		fmt.Printf("marking %s as processed\n", c.Input)
-		return MarkSkipped(c)
 	}
 
 	if outInfo != nil {
@@ -302,6 +312,22 @@ func runFile(c Config) error {
 		return swapInPlace(c, OutputPath(c))
 	}
 	return nil
+}
+
+// markOnly records c.Input as encoded and remuxed without processing it.  A
+// file that is already marked as encoded (e.g. by an older version of vshrink)
+// but not as remuxed only gets the missing remux marker.
+func markOnly(c Config) error {
+	if !IsMarked(c) {
+		fmt.Printf("marking %s as processed\n", c.Input)
+		return MarkSkipped(c)
+	}
+	if IsRemuxed(c) {
+		fmt.Printf("skipping %s: already processed\n", c.Input)
+		return nil
+	}
+	fmt.Printf("marking %s as remuxed\n", c.Input)
+	return MarkSkippedRemux(c)
 }
 
 // runCmd starts cmd and waits for it to finish.  While it runs, an interrupt
@@ -396,9 +422,11 @@ func swapInPlace(c Config, outputPath string) error {
 			os.Rename(backupPath, c.Input)
 		}
 
-		// Remove marker/xattr if it exists, since in-place processing did not complete.
+		// Remove markers/xattrs if they exist, since in-place processing did not complete.
 		os.Remove(MarkerPath(c))
 		RemoveXattr(c.Input)
+		os.Remove(RemuxMarkerPath(c))
+		RemoveRemuxXattr(c.Input)
 		os.Exit(1)
 	}()
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
@@ -431,6 +459,12 @@ func swapInPlace(c Config, outputPath string) error {
 			fmt.Printf("in-place: warning: could not restore original after marker creation failure: %v\n", err2)
 		}
 		return err
+	}
+
+	// Record that this file has been remuxed.  A missing remux marker only means a later remux
+	// pass repeats a lossless step, so a failure here is just a warning.
+	if err := MarkRemuxed(c, newInfo); err != nil {
+		fmt.Printf("in-place: warning: could not create remux marker: %v\n", err)
 	}
 
 	// Step 3: remove the backup.
