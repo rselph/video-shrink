@@ -507,7 +507,7 @@ func TestIsMarkedAndMarkerTime(t *testing.T) {
 		}
 	})
 
-	t.Run("stale xattr returns false", func(t *testing.T) {
+	t.Run("old xattr timestamp is still marked", func(t *testing.T) {
 		dir := t.TempDir()
 		input := filepath.Join(dir, "video.mp4")
 		if err := os.WriteFile(input, []byte("data"), 0644); err != nil {
@@ -523,8 +523,23 @@ func TestIsMarkedAndMarkerTime(t *testing.T) {
 		if err := vshrink.SetXattr(input, vshrink.FormatXattrValue(time.Now(), "test")); err != nil {
 			t.Fatal(err)
 		}
-		if vshrink.IsMarked(cfg) {
-			t.Error("IsMarked() should return false when xattr timestamp is stale")
+		// An xattr travels with the file, so its timestamp never makes it stale.
+		if !vshrink.IsMarked(cfg) {
+			t.Error("IsMarked() should return true for an xattr with an old timestamp")
+		}
+	})
+
+	t.Run("xattr without timestamp is marked", func(t *testing.T) {
+		dir := t.TempDir()
+		input := filepath.Join(dir, "video.mp4")
+		if err := os.WriteFile(input, []byte("data"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := vshrink.SetXattr(input, "garbage"); err != nil {
+			t.Fatal(err)
+		}
+		if !vshrink.IsMarked(vshrink.Config{Input: input}) {
+			t.Error("IsMarked() should return true when the xattr exists")
 		}
 	})
 }
@@ -1290,5 +1305,32 @@ func TestRunSkipsEncodedFileWithoutInPlace(t *testing.T) {
 	}
 	if _, err := os.Stat(vshrink.OutputPath(cfg)); !os.IsNotExist(err) {
 		t.Errorf("no output should be written, stat err = %v", err)
+	}
+}
+
+func TestRunInPlaceSkipsCopiedMarkedFile(t *testing.T) {
+	cfg, _, _ := inPlaceFixture(t, "orig", "unused", "")
+	cfg.HandbrakePath = "false"
+	cfg.FFmpegPath = "false"
+	// Markers written long ago; copying the file then gave it a new mtime.
+	old := vshrink.FormatXattrValue(time.Now().Add(-24*time.Hour), "test")
+	if err := vshrink.SetXattr(cfg.Input, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := vshrink.SetRemuxXattr(cfg.Input, old); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	if err := os.Chtimes(cfg.Input, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if !vshrink.IsMarked(cfg) || !vshrink.IsRemuxed(cfg) {
+		t.Fatal("copied file should still be marked encoded and remuxed")
+	}
+	if err := vshrink.Run(cfg); err != nil {
+		t.Fatalf("Run() should skip a copied, fully marked file, got error: %v", err)
+	}
+	if got := readTrimmed(t, cfg.Input); got != "orig" {
+		t.Errorf("input content = %q, want unchanged", got)
 	}
 }

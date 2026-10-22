@@ -140,15 +140,14 @@ var (
 )
 
 // findMarker checks the marker sources for k in priority order and returns
-// which source was found along with its effective timestamp.
+// which source was found along with its effective timestamp.  An xattr whose
+// value has no parsable timestamp is still reported, with a zero time.
 func findMarker(c Config, k markerKind) (markerSource, time.Time) {
 	// 1. xattr on the video file
 	value, err := getXattr(c.Input, k.key)
 	if err == nil {
-		ts, err := ParseXattrTimestamp(value)
-		if err == nil {
-			return markerXattr, ts
-		}
+		ts, _ := ParseXattrTimestamp(value)
+		return markerXattr, ts
 	}
 
 	// 2. Current marker file
@@ -169,16 +168,18 @@ func findMarker(c Config, k markerKind) (markerSource, time.Time) {
 }
 
 // IsMarked returns true if any marker source indicates the file has been
-// processed and the marker is not stale relative to the video's mtime.
-// When a marker file is found without a corresponding xattr, an upgrade
-// to xattr is attempted automatically.
+// processed.  An xattr travels with the file's contents, so it is always
+// honored, even when the file has been copied and has a newer mtime.  A marker
+// file is disregarded when it is stale relative to the video's mtime.  When a
+// marker file is found without a corresponding xattr, an upgrade to xattr is
+// attempted automatically.
 func IsMarked(c Config) bool {
 	return isMarked(c, encodedMarker)
 }
 
 // IsRemuxed returns true if any remux marker source indicates the file has
-// been remuxed and the marker is not stale relative to the video's mtime.
-// Like IsMarked, it upgrades a remux marker file to an xattr when possible.
+// been remuxed.  Like IsMarked, it always honors the xattr, disregards a stale
+// marker file, and upgrades a remux marker file to an xattr when possible.
 func IsRemuxed(c Config) bool {
 	return isMarked(c, remuxMarker)
 }
@@ -190,21 +191,22 @@ func isMarked(c Config, k markerKind) bool {
 	}
 
 	source, mtime := findMarker(c, k)
-	if source == markerNone {
+	switch source {
+	case markerNone:
 		return false
+	case markerXattr:
+		return true
 	}
 
-	// Staleness check: disregard the marker if the video file was modified
+	// Staleness check: marker files are named after the video rather than
+	// attached to it, so disregard one if the video file was modified
 	// significantly after it was written.
 	if inInfo.ModTime().Sub(mtime) >= 1*time.Minute {
 		return false
 	}
 
 	// Attempt upgrade from marker file to xattr.
-	if source != markerXattr {
-		upgradeMarker(c, k)
-	}
-
+	upgradeMarker(c, k)
 	return true
 }
 
@@ -213,10 +215,11 @@ func isMarked(c Config, k markerKind) bool {
 // returns "" if there is no marker.
 func markerContent(c Config, k markerKind) string {
 	if value, err := getXattr(c.Input, k.key); err == nil {
-		if _, err := ParseXattrTimestamp(value); err == nil {
-			_, content, _ := strings.Cut(value, " ")
-			return content
+		if _, err := ParseXattrTimestamp(value); err != nil {
+			return value
 		}
+		_, content, _ := strings.Cut(value, " ")
+		return content
 	}
 	paths := []string{k.path(c)}
 	if k.legacyPath != nil {

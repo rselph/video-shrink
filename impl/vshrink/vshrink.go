@@ -555,7 +555,8 @@ func swapInPlace(c Config, outputPath, encodedContent string) error {
 	}
 
 	// Record that this file has been processed.  The promoted file is a new file, so the marker
-	// is written afresh, timestamped with its mtime.
+	// is written afresh.  Its timestamp is the file's mtime, which matters only for the marker
+	// file fallback.
 	if err := writeMarker(c, encodedMarker, newInfo.ModTime(), encodedContent); err != nil {
 		fmt.Printf("in-place: warning: could not create marker: %v\n", err)
 		// Restore original, so we don't double encode on the next run.  This is a best effort

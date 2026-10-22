@@ -372,13 +372,28 @@ func TestIsRemuxed(t *testing.T) {
 		}
 	})
 
-	t.Run("stale xattr", func(t *testing.T) {
+	t.Run("old xattr timestamp", func(t *testing.T) {
 		input, cfg := setup(t)
 		if err := vshrink.SetRemuxXattr(input, vshrink.FormatXattrValue(time.Now().Add(-2*time.Hour), "remuxed")); err != nil {
 			t.Fatal(err)
 		}
+		if !vshrink.IsRemuxed(cfg) {
+			t.Error("IsRemuxed() should return true for an xattr with an old timestamp")
+		}
+	})
+
+	t.Run("stale marker file", func(t *testing.T) {
+		_, cfg := setup(t)
+		marker := vshrink.RemuxMarkerPath(cfg)
+		if err := os.WriteFile(marker, []byte("remuxed"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		past := time.Now().Add(-2 * time.Hour)
+		if err := os.Chtimes(marker, past, past); err != nil {
+			t.Fatal(err)
+		}
 		if vshrink.IsRemuxed(cfg) {
-			t.Error("IsRemuxed() should return false when the marker is stale")
+			t.Error("IsRemuxed() should return false when the marker file is stale")
 		}
 	})
 
