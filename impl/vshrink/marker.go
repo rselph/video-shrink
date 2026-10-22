@@ -275,14 +275,21 @@ func MarkRemuxed(c Config, info os.FileInfo) error {
 // been processed, so later runs leave it alone.  Like MarkComplete, it falls
 // back to marker files if xattrs are not supported.
 func MarkSkipped(c Config) error {
+	if err := MarkSkippedEncoded(c); err != nil {
+		return err
+	}
+	return MarkSkippedRemux(c)
+}
+
+// MarkSkippedEncoded records c.Input as encoded without it having been
+// processed, leaving any remux marker as it is.  It falls back to a marker
+// file if xattrs are not supported.
+func MarkSkippedEncoded(c Config) error {
 	info, err := os.Stat(c.Input)
 	if err != nil {
 		return err
 	}
-	if err := writeMarker(c, encodedMarker, info.ModTime(), skippedContent); err != nil {
-		return err
-	}
-	return writeMarker(c, remuxMarker, info.ModTime(), skippedContent)
+	return writeMarker(c, encodedMarker, info.ModTime(), skippedContent)
 }
 
 // MarkSkippedRemux records c.Input as remuxed without it having been

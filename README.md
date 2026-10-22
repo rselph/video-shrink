@@ -50,6 +50,19 @@ alone. Files that have only the "already processed" marker (such as files proces
 versions of vshrink) get the missing "remuxed" marker. Files that already have both are left as they
 are.
 
+- `-encode-only` and `-mux-only` restrict a run to one pass, and can't be used together.
+  - `-encode-only` re-encodes with HandBrake but doesn't remux. With `-in-place`, files that are
+    already re-encoded are skipped, and the re-encoded file replaces the original only if it's
+    smaller (or `-ignore-size` is set). A replaced file isn't marked as remuxed, since re-encoding
+    undoes any earlier remux. Without `-in-place`, the HandBrake output is written straight to the
+    output file.
+  - `-mux-only` remuxes the original with ffmpeg but doesn't re-encode it. With `-in-place`, files
+    that are already remuxed are skipped, and the remuxed file always replaces the original.
+  - With `-mark`, `-encode-only` records only the "already processed" marker and `-mux-only` records
+    only the "remuxed" marker.
+  - With `-in-place`, if an output file is left over from an interrupted run, these modes skip the
+    file. A plain `-in-place` run picks the leftover up.
+
 ### Directory Input
 
 If an input argument is a directory, vshrink recurses into it and converts every recognized video
@@ -101,6 +114,8 @@ vshrink [options] input-file [input-file...]
 | `-ignore-size` | false | With `-in-place`, keep the re-encoded file even if it is larger than the original |
 | `-keep` | false | Keep the output file when something goes wrong instead of deleting it |
 | `-mark` | false | Mark files as processed without encoding them, so later runs skip them |
+| `-encode-only` | false | Only re-encode with HandBrakeCLI; skip the ffmpeg remux |
+| `-mux-only` | false | Only remux with ffmpeg; skip the HandBrakeCLI re-encode |
 | `-continue` | false | Continue processing remaining files after an error |
 | `-v` | false | Verbose output (show HandBrakeCLI and ffmpeg stderr) |
 | `-no-progress` | false | Disable progress output (suppress HandBrakeCLI stdout) |

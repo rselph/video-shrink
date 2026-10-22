@@ -67,14 +67,20 @@ type Config struct {
 	Progress bool
 	// KeepOnError prevents deletion of the output file when an error occurs.
 	KeepOnError bool
-	// InPlace replaces the original file with the output when the output is smaller.
+	// InPlace replaces the original file with the processed file.  A re-encoded file is only kept
+	// when it is smaller than the original.
 	InPlace bool
-	// IgnoreSize replaces the original even when the output is larger.
+	// IgnoreSize keeps the re-encoded file even when it is larger than the original.
 	IgnoreSize bool
 	// ContinueOnError continues processing files in a directory even when an error occurs.
 	ContinueOnError bool
 	// MarkOnly records the file as processed without encoding it, so later runs skip it.
 	MarkOnly bool
+	// EncodeOnly runs only the HandBrakeCLI re-encode pass, and makes MarkOnly record only the
+	// encoded marker.
+	EncodeOnly bool
+	// MuxOnly runs only the ffmpeg remux pass, and makes MarkOnly record only the remux marker.
+	MuxOnly bool
 }
 
 // OutputPath returns the output file path for the given config,
@@ -169,6 +175,9 @@ func BuildRemuxArgs(c Config, input string) []string {
 // c.Input is a directory it recurses into it (see runDir).  It returns an error
 // if HandBrakeCLI or ffmpeg cannot be started or exits with a non-zero status.
 func Run(c Config) error {
+	if c.EncodeOnly && c.MuxOnly {
+		return fmt.Errorf("-encode-only and -mux-only cannot be combined")
+	}
 	info, err := os.Stat(c.Input)
 	if err != nil {
 		return fmt.Errorf("cannot access input: %w", err)
@@ -231,21 +240,45 @@ func runDir(c Config) error {
 
 // runFile processes a single input file described by c.  Without -in-place it
 // invokes HandBrakeCLI, writing to TempPath(c), then remuxes that file with
-// ffmpeg into OutputPath(c).  With -in-place see runInPlace.
+// ffmpeg into OutputPath(c).  -encode-only writes the HandBrakeCLI output to
+// OutputPath(c) without remuxing it, and -mux-only remuxes c.Input into
+// OutputPath(c) without re-encoding it.  With -in-place see runInPlace,
+// runInPlaceEncodeOnly and runInPlaceMuxOnly.
 func runFile(c Config) error {
 	if c.MarkOnly {
 		return markOnly(c)
 	}
 	if c.InPlace {
+		switch {
+		case c.EncodeOnly:
+			return runInPlaceEncodeOnly(c)
+		case c.MuxOnly:
+			return runInPlaceMuxOnly(c)
+		}
 		return runInPlace(c)
 	}
 
-	if IsMarked(c) {
+	done := IsMarked(c)
+	if c.MuxOnly {
+		done = IsRemuxed(c)
+	}
+	if done {
 		fmt.Printf("skipping %s: already processed\n", c.Input)
 		return nil
 	}
 	if _, err := os.Stat(OutputPath(c)); err == nil {
 		fmt.Printf("skipping %s: output file already exists\n", c.Input)
+		return nil
+	}
+
+	if c.EncodeOnly {
+		fmt.Println()
+		if err := encode(c); err != nil {
+			return err
+		}
+		if err := os.Rename(TempPath(c), OutputPath(c)); err != nil {
+			return fmt.Errorf("cannot rename re-encoded file to output: %w", err)
+		}
 		return nil
 	}
 
@@ -255,6 +288,9 @@ func runFile(c Config) error {
 		return err
 	}
 	fmt.Println()
+	if c.MuxOnly {
+		return remux(c, ffmpeg, c.Input)
+	}
 	if err := encode(c); err != nil {
 		return err
 	}
@@ -285,7 +321,7 @@ func runInPlace(c Config) error {
 	// A leftover output from an interrupted run has already been remuxed.
 	if outInfo, err := os.Stat(OutputPath(c)); err == nil {
 		if !needEncode {
-			return swapInPlace(c, OutputPath(c), "")
+			return swapInPlace(c, OutputPath(c), swapMarkers{encoded: true, remuxed: true})
 		}
 		origInfo, err := os.Stat(c.Input)
 		if err != nil {
@@ -293,7 +329,7 @@ func runInPlace(c Config) error {
 		}
 		encodedContent = formatMarkerContent(origInfo, outInfo)
 		if keepEncoded(c, origInfo, outInfo) {
-			return swapInPlace(c, OutputPath(c), encodedContent)
+			return swapInPlace(c, OutputPath(c), swapMarkers{encoded: true, encodedContent: encodedContent, remuxed: true})
 		}
 		fmt.Printf("in-place: re-encoded file is not smaller; discarding %s\n", OutputPath(c))
 		os.Remove(OutputPath(c))
@@ -332,7 +368,78 @@ func runInPlace(c Config) error {
 	if err := remux(c, ffmpeg, src); err != nil {
 		return err
 	}
-	return swapInPlace(c, OutputPath(c), encodedContent)
+	return swapInPlace(c, OutputPath(c), swapMarkers{encoded: true, encodedContent: encodedContent, remuxed: true})
+}
+
+// runInPlaceEncodeOnly re-encodes c.Input in place without remuxing it.  The
+// re-encoded file replaces the original only when it is smaller (or
+// -ignore-size is set), and carries no remux marker, since re-encoding
+// invalidates any earlier remux.  When the original is kept, it is marked
+// encoded and its remux state is left alone.
+func runInPlaceEncodeOnly(c Config) error {
+	if IsMarked(c) {
+		fmt.Printf("skipping %s: already processed\n", c.Input)
+		return nil
+	}
+	if skipLeftoverOutput(c) {
+		return nil
+	}
+
+	fmt.Println()
+	if err := encode(c); err != nil {
+		return err
+	}
+	origInfo, err := os.Stat(c.Input)
+	if err != nil {
+		return fmt.Errorf("in-place: cannot stat original: %w", err)
+	}
+	tmpInfo, err := os.Stat(TempPath(c))
+	if err != nil {
+		return fmt.Errorf("in-place: cannot stat re-encoded file: %w", err)
+	}
+	content := formatMarkerContent(origInfo, tmpInfo)
+	if keepEncoded(c, origInfo, tmpInfo) {
+		// Swap the temp file in directly, so that OutputPath(c) only ever holds remuxed files.
+		return swapInPlace(c, TempPath(c), swapMarkers{encoded: true, encodedContent: content})
+	}
+	fmt.Printf("in-place: re-encoded file is not smaller; keeping original\n")
+	os.Remove(TempPath(c))
+	return writeMarker(c, encodedMarker, origInfo.ModTime(), content)
+}
+
+// runInPlaceMuxOnly remuxes c.Input in place without re-encoding it.  The
+// remuxed file always replaces the original; its encoded marker is carried
+// over only if the original had one.
+func runInPlaceMuxOnly(c Config) error {
+	if IsRemuxed(c) {
+		fmt.Printf("skipping %s: already processed\n", c.Input)
+		return nil
+	}
+	if skipLeftoverOutput(c) {
+		return nil
+	}
+	encoded := IsMarked(c)
+
+	ffmpeg, err := lookupFFmpeg(c)
+	if err != nil {
+		return err
+	}
+	fmt.Println()
+	if err := remux(c, ffmpeg, c.Input); err != nil {
+		return err
+	}
+	return swapInPlace(c, OutputPath(c), swapMarkers{encoded: encoded, remuxed: true})
+}
+
+// skipLeftoverOutput reports whether OutputPath(c) is left over from an earlier
+// run, printing a message if so.  -encode-only and -mux-only can't tell what
+// such a file contains, so they leave it for a plain -in-place run to handle.
+func skipLeftoverOutput(c Config) bool {
+	if _, err := os.Stat(OutputPath(c)); err != nil {
+		return false
+	}
+	fmt.Printf("skipping %s: output file already exists\n", c.Input)
+	return true
 }
 
 // keepEncoded reports whether a re-encoded file should replace the original:
@@ -409,20 +516,25 @@ func remux(c Config, ffmpeg, src string) error {
 	return nil
 }
 
-// markOnly records c.Input as encoded and remuxed without processing it.  A
-// file that is already marked as encoded (e.g. by an older version of vshrink)
-// but not as remuxed only gets the missing remux marker.
+// markOnly records c.Input as encoded and remuxed without processing it.  With
+// -encode-only only the encoded marker is recorded, and with -mux-only only the
+// remux marker.  Markers the file already has are left as they are.
 func markOnly(c Config) error {
-	if !IsMarked(c) {
+	markEncoded := !c.MuxOnly && !IsMarked(c)
+	markRemuxed := !c.EncodeOnly && !IsRemuxed(c)
+	switch {
+	case markEncoded && markRemuxed:
 		fmt.Printf("marking %s as processed\n", c.Input)
 		return MarkSkipped(c)
+	case markEncoded:
+		fmt.Printf("marking %s as encoded\n", c.Input)
+		return MarkSkippedEncoded(c)
+	case markRemuxed:
+		fmt.Printf("marking %s as remuxed\n", c.Input)
+		return MarkSkippedRemux(c)
 	}
-	if IsRemuxed(c) {
-		fmt.Printf("skipping %s: already processed\n", c.Input)
-		return nil
-	}
-	fmt.Printf("marking %s as remuxed\n", c.Input)
-	return MarkSkippedRemux(c)
+	fmt.Printf("skipping %s: already processed\n", c.Input)
+	return nil
 }
 
 // runCmd starts cmd and waits for it to finish.  While it runs, an interrupt
@@ -456,10 +568,20 @@ func runCmd(cmd *exec.Cmd) (killed bool, err error) {
 	return killed, err
 }
 
-// swapInPlace replaces c.Input with outputPath and records both the encoded
-// and remux markers on the result.  encodedContent is the encoded marker text;
-// when empty, the text of c.Input's existing encoded marker is carried over.
-// The swap is performed via three steps so the original is never destroyed
+// swapMarkers says which markers swapInPlace records on the promoted file.
+type swapMarkers struct {
+	// encoded writes the encoded marker.
+	encoded bool
+	// encodedContent is the encoded marker text.  When empty, the text of
+	// c.Input's existing encoded marker is carried over.
+	encodedContent string
+	// remuxed writes the remux marker.  When false, any remux marker file is
+	// removed, since it named the original.
+	remuxed bool
+}
+
+// swapInPlace replaces c.Input with outputPath and records the markers
+// selected by m on the result.  The swap is performed via three steps so the original is never destroyed
 // before a valid replacement exists:
 //
 //  1. Rename original → original.vshrink.orig   (backup)
@@ -475,7 +597,7 @@ func runCmd(cmd *exec.Cmd) (killed bool, err error) {
 //   - backup present, output absent: step 2 done, step 3 not yet.
 //     Rename original → output, then backup → original, and remove any marker
 //     files this swap created.
-func swapInPlace(c Config, outputPath, encodedContent string) error {
+func swapInPlace(c Config, outputPath string, m swapMarkers) error {
 	if _, err := os.Stat(c.Input); err != nil {
 		return fmt.Errorf("in-place: cannot stat original: %w", err)
 	}
@@ -483,7 +605,8 @@ func swapInPlace(c Config, outputPath, encodedContent string) error {
 	if err != nil {
 		return fmt.Errorf("in-place: cannot stat output: %w", err)
 	}
-	if encodedContent == "" {
+	encodedContent := m.encodedContent
+	if m.encoded && encodedContent == "" {
 		encodedContent = markerContent(c, encodedMarker)
 	}
 
@@ -557,26 +680,35 @@ func swapInPlace(c Config, outputPath, encodedContent string) error {
 	// Record that this file has been processed.  The promoted file is a new file, so the marker
 	// is written afresh.  Its timestamp is the file's mtime, which matters only for the marker
 	// file fallback.
-	if err := writeMarker(c, encodedMarker, newInfo.ModTime(), encodedContent); err != nil {
-		fmt.Printf("in-place: warning: could not create marker: %v\n", err)
-		// Restore original, so we don't double encode on the next run.  This is a best effort
-		// attempt, so if it fails we just print a warning and leave the files as they are.
-		err2 := os.Rename(backupPath, c.Input)
-		if err2 != nil {
-			fmt.Printf("in-place: warning: could not restore original after marker creation failure: %v\n", err2)
+	if m.encoded {
+		if err := writeMarker(c, encodedMarker, newInfo.ModTime(), encodedContent); err != nil {
+			fmt.Printf("in-place: warning: could not create marker: %v\n", err)
+			// Restore original, so we don't double encode on the next run.  This is a best effort
+			// attempt, so if it fails we just print a warning and leave the files as they are.
+			err2 := os.Rename(backupPath, c.Input)
+			if err2 != nil {
+				fmt.Printf("in-place: warning: could not restore original after marker creation failure: %v\n", err2)
+			}
+			return err
 		}
-		return err
 	}
 
 	// Record that this file has been remuxed.  A missing remux marker only means a later run
 	// repeats a lossless step, so a failure here is just a warning.
-	if err := MarkRemuxed(c, newInfo); err != nil {
-		fmt.Printf("in-place: warning: could not create remux marker: %v\n", err)
+	if m.remuxed {
+		if err := MarkRemuxed(c, newInfo); err != nil {
+			fmt.Printf("in-place: warning: could not create remux marker: %v\n", err)
+		}
 	}
 
 	// Step 3: remove the backup.
 	if err := os.Remove(backupPath); err != nil {
 		fmt.Printf("in-place: warning: could not remove backup %s: %v\n", backupPath, err)
+	}
+
+	// A remux marker file named the original, so it doesn't describe the new file.
+	if !m.remuxed {
+		os.Remove(RemuxMarkerPath(c))
 	}
 
 	return nil

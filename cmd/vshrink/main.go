@@ -23,6 +23,8 @@ func main() {
 		continueOnError bool
 		printPreset     bool
 		markOnly        bool
+		encodeOnly      bool
+		muxOnly         bool
 	)
 
 	flag.StringVar(&suffix, "suffix", vshrink.DefaultSuffix, "Suffix inserted before the file extension")
@@ -38,6 +40,8 @@ func main() {
 	flag.BoolVar(&ignoreSize, "ignore-size", false, "with -in-place, keep the re-encoded file even if it is larger")
 	flag.BoolVar(&continueOnError, "continue", false, "continue processing other files on error")
 	flag.BoolVar(&markOnly, "mark", false, "mark files as processed without encoding them")
+	flag.BoolVar(&encodeOnly, "encode-only", false, "only re-encode with HandBrakeCLI; skip the ffmpeg remux")
+	flag.BoolVar(&muxOnly, "mux-only", false, "only remux with ffmpeg; skip the HandBrakeCLI re-encode")
 	flag.BoolVar(&printPreset, "print-preset", false, "print the suggested HandBrake preset JSON and exit")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: vshrink [options] input-file [input-file...]\n\n")
@@ -72,6 +76,8 @@ func main() {
 			IgnoreSize:      ignoreSize,
 			ContinueOnError: continueOnError,
 			MarkOnly:        markOnly,
+			EncodeOnly:      encodeOnly,
+			MuxOnly:         muxOnly,
 		}
 
 		if err := vshrink.Run(cfg); err != nil {
