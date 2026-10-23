@@ -19,6 +19,12 @@ jobs:
             goarch: amd64
           - goos: darwin
             goarch: arm64
+          - goos: windows
+            goarch: amd64
+            ext: .exe
+
+    env:
+      ASSET: vshrink-${{ matrix.goos }}-${{ matrix.goarch }}
 
     steps:
       - name: Checkout
@@ -34,12 +40,19 @@ jobs:
           CGO_ENABLED: "0"
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-        run: go build -o vshrink ./cmd/vshrink
+        run: go build -trimpath -ldflags="-s -w" -o vshrink${{ matrix.ext }} ./cmd/vshrink
 
       - name: Package
-        run: tar -czf vshrink-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz vshrink
+        run: |
+          if [ "${{ matrix.goos }}" = windows ]; then
+            zip "$ASSET.zip" vshrink.exe
+            echo "ARCHIVE=$ASSET.zip" >> "$GITHUB_ENV"
+          else
+            tar -czf "$ASSET.tar.gz" vshrink
+            echo "ARCHIVE=$ASSET.tar.gz" >> "$GITHUB_ENV"
+          fi
 
       - name: Upload Release Asset
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.event.release.tag_name }}" vshrink-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz --clobber
+        run: gh release upload "${{ github.event.release.tag_name }}" "$ARCHIVE" --clobber

@@ -63,7 +63,14 @@ func RemoveRemuxXattr(path string) error {
 	return removeXattr(path, RemuxXattrKey)
 }
 
+// On platforms without xattr support (e.g. Windows), the xattr package's
+// operations are no-ops that report success, so check XATTR_SUPPORTED first
+// to make callers fall back to marker files.
+
 func setXattr(path, key, value string) error {
+	if !xattr.XATTR_SUPPORTED {
+		return ErrXattrNotSupported
+	}
 	err := xattr.Set(path, key, []byte(value))
 	if err != nil && errors.Is(err, syscall.ENOTSUP) {
 		return ErrXattrNotSupported
@@ -72,6 +79,9 @@ func setXattr(path, key, value string) error {
 }
 
 func getXattr(path, key string) (string, error) {
+	if !xattr.XATTR_SUPPORTED {
+		return "", ErrXattrNotSupported
+	}
 	data, err := xattr.Get(path, key)
 	if err != nil {
 		if errors.Is(err, syscall.ENOTSUP) {
@@ -83,6 +93,9 @@ func getXattr(path, key string) (string, error) {
 }
 
 func removeXattr(path, key string) error {
+	if !xattr.XATTR_SUPPORTED {
+		return ErrXattrNotSupported
+	}
 	err := xattr.Remove(path, key)
 	if err != nil {
 		if errors.Is(err, syscall.ENOTSUP) {
