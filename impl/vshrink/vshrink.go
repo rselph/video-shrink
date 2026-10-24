@@ -30,7 +30,6 @@ const (
 var VideoExtensions = map[string]bool{
 	".mp4":  true,
 	".mkv":  true,
-	".avi":  true,
 	".mov":  true,
 	".m4v":  true,
 	".wmv":  true,
@@ -41,6 +40,7 @@ var VideoExtensions = map[string]bool{
 	".ts":   true,
 	".m2ts": true,
 	".vob":  true,
+	// ".avi":  true,    // Disabled due to compatibility issues with remuxing
 }
 
 // IsVideoFile returns true when path has a recognised video file extension.

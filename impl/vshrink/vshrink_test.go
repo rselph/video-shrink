@@ -78,12 +78,12 @@ func TestBuildArgs(t *testing.T) {
 		},
 		{
 			name:   "custom suffix applied",
-			config: vshrink.Config{Input: "/movies/film.avi", Suffix: ".enc"},
+			config: vshrink.Config{Input: "/movies/film.mov", Suffix: ".enc"},
 			want: []string{
 				"--preset-import-gui",
 				"--preset", vshrink.DefaultPreset,
-				"-i", "/movies/film.avi",
-				"-o", "/movies/film.tmp.enc.avi",
+				"-i", "/movies/film.mov",
+				"-o", "/movies/film.tmp.enc.mov",
 			},
 		},
 	}
@@ -190,6 +190,23 @@ func TestRun(t *testing.T) {
 		}
 	})
 
+	t.Run("directory mode skips avi files", func(t *testing.T) {
+		dir := t.TempDir()
+		// If the .avi file were not skipped it would be passed to 'false'
+		// (HandBrakeCLI stand-in) which would cause Run to return an error.
+		if err := os.WriteFile(filepath.Join(dir, "movie.avi"), []byte{}, 0644); err != nil {
+			t.Fatal(err)
+		}
+		cfg := vshrink.Config{
+			Input:         dir,
+			HandbrakePath: "false",
+			FFmpegPath:    "false",
+		}
+		if err := vshrink.Run(cfg); err != nil {
+			t.Errorf("Run() should skip .avi file but got error: %v", err)
+		}
+	})
+
 	t.Run("directory mode skips already-converted files", func(t *testing.T) {
 		dir := t.TempDir()
 		// Only place a previously-converted file in the directory.
@@ -216,8 +233,9 @@ func TestIsVideoFile(t *testing.T) {
 	}{
 		{"movie.mp4", true},
 		{"clip.mkv", true},
-		{"film.AVI", true}, // case-insensitive
-		{"film.MOV", true},
+		{"film.MOV", true},  // case-insensitive
+		{"film.avi", false}, // disabled: remuxing h265 into avi is unreliable
+		{"film.AVI", false},
 		{"doc.pdf", false},
 		{"readme.txt", false},
 		{"archive.zip", false},
@@ -269,8 +287,8 @@ func TestMarkerPath(t *testing.T) {
 		},
 		{
 			name:   "nested path",
-			config: vshrink.Config{Input: "/a/b/c/clip.avi"},
-			want:   "/a/b/c/" + vshrink.MarkerPrefix + "clip.avi" + vshrink.MarkerSuffix,
+			config: vshrink.Config{Input: "/a/b/c/clip.mov"},
+			want:   "/a/b/c/" + vshrink.MarkerPrefix + "clip.mov" + vshrink.MarkerSuffix,
 		},
 	}
 	for _, tt := range tests {
@@ -328,8 +346,8 @@ func TestLegacyMarkerPath(t *testing.T) {
 		},
 		{
 			name:   "nested path",
-			config: vshrink.Config{Input: "/a/b/c/clip.avi"},
-			want:   "/a/b/c/" + vshrink.OldMarkerPrefix + "clip.avi",
+			config: vshrink.Config{Input: "/a/b/c/clip.mov"},
+			want:   "/a/b/c/" + vshrink.OldMarkerPrefix + "clip.mov",
 		},
 	}
 	for _, tt := range tests {

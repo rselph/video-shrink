@@ -70,7 +70,7 @@ file it finds. This works for both regular and in-place modes. Files that have a
 processed are skipped, apart from the remux pass described above. Vshrink will never re-encode a
 file twice.
 
-Recognized video extensions: `.mp4`, `.mkv`, `.avi`, `.mov`, `.m4v`, `.wmv`, `.flv`, `.webm`,
+Recognized video extensions: `.mp4`, `.mkv`, `.mov`, `.m4v`, `.wmv`, `.flv`, `.webm`,
 `.mpeg`, `.mpg`, `.ts`, `.m2ts`, `.vob`.
 
 ## Getting [HandBrakeCLI](https://handbrake.fr/docs/en/latest/cli/cli-options.html)
